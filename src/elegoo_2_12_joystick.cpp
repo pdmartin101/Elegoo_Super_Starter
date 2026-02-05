@@ -19,19 +19,12 @@ void loop() {
 
   Serial.print(digitalRead(SW_pin));
 
-  Serial.print("
-");
+  Serial.print("\n");
   Serial.print("X-axis: ");
-
   Serial.print(analogRead(X_pin));
-
-  
-  Serial.print("
-");
+  Serial.print("\n");
   Serial.print("Y-axis: ");
   Serial.println(analogRead(Y_pin));
-  Serial.print("
-
-");
+  Serial.print("\n\n");
   delay(1000);
 }
