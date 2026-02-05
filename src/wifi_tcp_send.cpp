@@ -1,21 +1,22 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiUdp.h>
+#include <WiFiClient.h>
 #include <ESPmDNS.h>
 #include "wifi_credentials.h"
 
-const int TARGET_PORT = 12345;
+const int TARGET_PORT = 12346;
 
-WiFiUDP udp;
+WiFiClient client;
 IPAddress targetIP;
 bool receiverFound = false;
 
-// Forward declaration
+// Forward declarations
 void discoverReceiver();
+bool connectToServer();
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("\nESP32 UDP Sender with mDNS Discovery");
+  Serial.println("\nESP32 TCP Sender with mDNS Discovery");
 
   // Connect to WiFi
   Serial.printf("Connecting to %s", WIFI_SSID);
@@ -36,12 +37,12 @@ void setup() {
   }
 
   // Discover the receiver service
-  Serial.println("Searching for UDP receiver service...");
+  Serial.println("Searching for TCP receiver service...");
   discoverReceiver();
 }
 
 void discoverReceiver() {
-  int n = MDNS.queryService("udpreceiver", "udp");
+  int n = MDNS.queryService("tcpreceiver", "tcp");
 
   if (n > 0) {
     targetIP = MDNS.IP(0);
@@ -56,6 +57,20 @@ void discoverReceiver() {
   }
 }
 
+bool connectToServer() {
+  if (!client.connected()) {
+    Serial.print("Connecting to server...");
+    if (client.connect(targetIP, TARGET_PORT)) {
+      Serial.println(" connected!");
+      return true;
+    } else {
+      Serial.println(" failed!");
+      return false;
+    }
+  }
+  return true;
+}
+
 void loop() {
   static int counter = 0;
   static unsigned long lastDiscovery = 0;
@@ -67,15 +82,20 @@ void loop() {
   }
 
   if (receiverFound) {
-    // Create message
-    String message = "Hello from ESP32! Count: " + String(counter++);
+    if (connectToServer()) {
+      // Create message
+      String message = "Hello from ESP32! Count: " + String(counter++);
 
-    // Send UDP packet
-    udp.beginPacket(targetIP, TARGET_PORT);
-    udp.print(message);
-    udp.endPacket();
+      // Send TCP message
+      client.println(message);
+      Serial.println("Sent: " + message);
 
-    Serial.println("Sent: " + message);
+      // Check for response
+      if (client.available()) {
+        String response = client.readStringUntil('\n');
+        Serial.println("Response: " + response);
+      }
+    }
   }
 
   delay(2000);

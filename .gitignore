@@ -28,3 +28,6 @@ Thumbs.db
 # C# build
 bin/
 obj/
+
+# Local credentials
+include/wifi_credentials.h
