@@ -19,3 +19,12 @@ Thumbs.db
 
 # Claude Code
 .claude/
+
+# Visual Studio
+*.sln
+*.suo
+*.user
+
+# C# build
+bin/
+obj/
