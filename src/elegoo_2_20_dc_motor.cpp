@@ -8,9 +8,9 @@ Exercise the motor using
 the L293D chip
 ************************/
 
-#define ENABLE 18  /  enable connect to D18
-#define DIRA 19    / In1 connect to D19
-#define DIRB 5     /In2 connect to D5
+#define ENABLE 18  // enable connect to D18
+#define DIRA 19    // In1 connect to D19
+#define DIRB 5     // In2 connect to D5
 
 int i;
  

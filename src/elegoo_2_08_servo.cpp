@@ -2,7 +2,7 @@
 
 //www.elegoo.com
 //2025.11.20
-#include <Servo.h>
+#include <ESP32Servo.h>
 /* After including the corresponding libraries,
    we can use the "class" like "Servo" created by the developer for us.
    We can use the functions and variables created in the libraries by creating 

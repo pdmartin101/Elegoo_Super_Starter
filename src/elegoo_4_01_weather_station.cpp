@@ -4,7 +4,7 @@
 #include "DHT11.h"
 #include "OLED_Display.h"
 
-DHT_nonblocking_sensor sensor;
+DHT_sensor sensor;
 OLED_Display display;
 
 int adc_id = 25; //pin of water level sensor
@@ -16,6 +16,7 @@ unsigned long lastDHTUpdate = 0;   // Time to read DHT11 periodically
 
 void setup() {
     Serial.begin(9600);
+    sensor.begin();
     display.setupOLED();
     display.cleanOled();   // Clear the OLED screen once on power-up
 }

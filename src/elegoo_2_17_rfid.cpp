@@ -88,8 +88,7 @@ void loop() {
 //  Serial.print(mfrc522.PICC_GetTypeName(piccType));
 //  Serial.print(F(" (SAK "));
 //  Serial.print(mfrc522.uid.sak);
-//  Serial.print(")
-");
+//  Serial.print("");
 //  if (  piccType != MFRC522::PICC_TYPE_MIFARE_MINI 
 //    &&  piccType != MFRC522::PICC_TYPE_MIFARE_1K
 //    &&  piccType != MFRC522::PICC_TYPE_MIFARE_4K) {
