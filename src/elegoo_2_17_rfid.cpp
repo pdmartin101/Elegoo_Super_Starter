@@ -1,4 +1,6 @@
-#include <Arduino.h>n//www.elegoo.com
+#include <Arduino.h>
+
+//www.elegoo.com
 //2016.12.09
 
 /*
@@ -86,7 +88,8 @@ void loop() {
 //  Serial.print(mfrc522.PICC_GetTypeName(piccType));
 //  Serial.print(F(" (SAK "));
 //  Serial.print(mfrc522.uid.sak);
-//  Serial.print(")\r\n");
+//  Serial.print(")
+");
 //  if (  piccType != MFRC522::PICC_TYPE_MIFARE_MINI 
 //    &&  piccType != MFRC522::PICC_TYPE_MIFARE_1K
 //    &&  piccType != MFRC522::PICC_TYPE_MIFARE_4K) {

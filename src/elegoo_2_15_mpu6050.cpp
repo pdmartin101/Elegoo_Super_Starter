@@ -1,4 +1,6 @@
-#include <Arduino.h>n// MPU-6050 Short Example Sketch
+#include <Arduino.h>
+
+// MPU-6050 Short Example Sketch
 //www.elegoo.com
 //2016.12.9
 

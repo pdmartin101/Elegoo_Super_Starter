@@ -1,4 +1,6 @@
-#include <Arduino.h>n//www.elegoo.com
+#include <Arduino.h>
+
+//www.elegoo.com
 //2016.12.08
 
 int buzzer = 12;//the pin of the active buzzer

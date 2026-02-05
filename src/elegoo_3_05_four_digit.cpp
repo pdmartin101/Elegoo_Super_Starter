@@ -1,4 +1,6 @@
-#include <Arduino.h>n//www.elegoo.com
+#include <Arduino.h>
+
+//www.elegoo.com
 //2016.12.12
 
 int latch=19;  //74HC595  pin 9 STCP

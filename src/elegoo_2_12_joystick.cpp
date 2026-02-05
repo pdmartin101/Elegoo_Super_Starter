@@ -1,4 +1,6 @@
-#include <Arduino.h>n//www.elegoo.com
+#include <Arduino.h>
+
+//www.elegoo.com
 //2016.12.09
 //2025.11.25
 // Arduino pin numbers
@@ -17,15 +19,19 @@ void loop() {
 
   Serial.print(digitalRead(SW_pin));
 
-  Serial.print("\n");
+  Serial.print("
+");
   Serial.print("X-axis: ");
 
   Serial.print(analogRead(X_pin));
 
   
-  Serial.print("\n");
+  Serial.print("
+");
   Serial.print("Y-axis: ");
   Serial.println(analogRead(Y_pin));
-  Serial.print("\n\n");
+  Serial.print("
+
+");
   delay(1000);
 }

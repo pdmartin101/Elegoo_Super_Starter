@@ -1,4 +1,6 @@
-#include <Arduino.h>n#include <Wire.h>
+#include <Arduino.h>
+
+#include <Wire.h>
 #include "snake.h"
 #include "Joystick.h"
 #include "score.h"

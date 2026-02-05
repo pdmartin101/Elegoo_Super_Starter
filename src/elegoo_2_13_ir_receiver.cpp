@@ -1,4 +1,6 @@
-#include <Arduino.h>n// ESP32 NEC Infrared Decoding (No External Libraries)
+#include <Arduino.h>
+
+// ESP32 NEC Infrared Decoding (No External Libraries)
 // Decode NEC protocol with strict timing requirements
 const int IR = 25;  // IR receiver data pin
 

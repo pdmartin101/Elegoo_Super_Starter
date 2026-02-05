@@ -1,4 +1,6 @@
-#include <Arduino.h>n#include <Stepper.h>
+#include <Arduino.h>
+
+#include <Stepper.h>
 
 // Stepper motor parameters (28BYJ-48 + ULN2003 compatible)
 const int stepsPerRevolution = 2048;  // Steps per full rotation (standard for 28BYJ-48)
