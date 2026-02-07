@@ -56,8 +56,8 @@ volatile unsigned long intervalHistory[HISTORY_SIZE];
 volatile int historyIndex = 0;
 
 // Test mode variables - auto cycles through all cars
-const unsigned long TEST_BURST_DURATION = 100;   // 100ms pulse burst
-const unsigned long TEST_GAP_DURATION = 2000;    // 2 seconds between tests
+const unsigned long TEST_BURST_DURATION = 10000;  // 10 second pulse burst
+const unsigned long TEST_GAP_DURATION = 2000;     // 2 seconds between tests
 unsigned long lastTestTime = 0;
 bool testBurstActive = false;
 bool toneInitialized = false;
@@ -177,6 +177,8 @@ void runAutoTest() {
   // Start a new test burst every TEST_GAP_DURATION
   if (!testBurstActive && (now - lastTestTime > TEST_GAP_DURATION)) {
     testCarIndex = (testCarIndex + 1) % 6;  // Cycle 0-5
+    Serial.printf("\n--- Testing Car %d (%d Hz) for 10 seconds ---\n",
+                  testCarIndex + 1, CAR_FREQUENCIES[testCarIndex]);
     tone(TEST_LED_PIN, CAR_FREQUENCIES[testCarIndex]);
     toneInitialized = true;
     testBurstActive = true;
