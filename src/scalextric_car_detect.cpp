@@ -35,6 +35,10 @@ const bool DEBUG_MODE = true;
 const int CAR_FREQUENCIES[] = {5500, 4400, 3700, 3100, 2800, 2400};
 const int FREQUENCY_TOLERANCE = 300;  // Hz tolerance for matching
 
+// Valid interval range for car frequencies (2400-5500 Hz = 182-417 us)
+const unsigned long MIN_VALID_INTERVAL = 150;  // ~6667 Hz max (with margin)
+const unsigned long MAX_VALID_INTERVAL = 450;  // ~2222 Hz min (with margin)
+
 // Timing variables (volatile for ISR access)
 volatile unsigned long lastPulseTime = 0;
 volatile unsigned long pulseInterval = 0;
@@ -42,27 +46,31 @@ volatile int pulseCount = 0;
 volatile bool newPulseData = false;
 
 // Detection state
-const int MIN_PULSES_FOR_ID = 5;      // Need several pulses to confirm frequency
+const int MIN_PULSES_FOR_ID = 10;     // Need several pulses to confirm frequency
 const unsigned long DETECTION_TIMEOUT = 50000;  // 50ms - car has passed
+const int CONFIRM_COUNT = 3;          // Need this many consistent readings to confirm car
 
 // Pulse history for frequency calculation
 const int HISTORY_SIZE = 10;
 volatile unsigned long intervalHistory[HISTORY_SIZE];
 volatile int historyIndex = 0;
 
-// ISR for rising edge detection
+// ISR for falling edge detection
 void IRAM_ATTR onPulseDetected() {
   unsigned long now = micros();
 
   if (lastPulseTime > 0) {
     pulseInterval = now - lastPulseTime;
 
-    // Store in history for averaging
-    intervalHistory[historyIndex] = pulseInterval;
-    historyIndex = (historyIndex + 1) % HISTORY_SIZE;
+    // Filter: only accept intervals in valid range for car frequencies
+    if (pulseInterval >= MIN_VALID_INTERVAL && pulseInterval <= MAX_VALID_INTERVAL) {
+      // Store in history for averaging
+      intervalHistory[historyIndex] = pulseInterval;
+      historyIndex = (historyIndex + 1) % HISTORY_SIZE;
 
-    pulseCount++;
-    newPulseData = true;
+      pulseCount++;
+      newPulseData = true;
+    }
   }
 
   lastPulseTime = now;
@@ -77,21 +85,33 @@ int identifyCar(float frequency) {
   return 0;  // Unknown
 }
 
-float calculateAverageFrequency() {
-  unsigned long totalInterval = 0;
+float calculateMedianFrequency() {
+  // Copy valid intervals to temp array for sorting
+  unsigned long temp[HISTORY_SIZE];
   int validSamples = 0;
 
   for (int i = 0; i < HISTORY_SIZE; i++) {
     if (intervalHistory[i] > 0) {
-      totalInterval += intervalHistory[i];
-      validSamples++;
+      temp[validSamples++] = intervalHistory[i];
     }
   }
 
   if (validSamples < 3) return 0;
 
-  float avgInterval = (float)totalInterval / validSamples;
-  return 1000000.0 / avgInterval;  // Convert microseconds to Hz
+  // Simple bubble sort (small array)
+  for (int i = 0; i < validSamples - 1; i++) {
+    for (int j = 0; j < validSamples - i - 1; j++) {
+      if (temp[j] > temp[j + 1]) {
+        unsigned long swap = temp[j];
+        temp[j] = temp[j + 1];
+        temp[j + 1] = swap;
+      }
+    }
+  }
+
+  // Get median
+  unsigned long medianInterval = temp[validSamples / 2];
+  return 1000000.0 / medianInterval;  // Convert microseconds to Hz
 }
 
 void resetDetection() {
@@ -167,6 +187,8 @@ void loop() {
   static unsigned long lastActivityTime = 0;
   static bool detecting = false;
   static int lastCarDetected = 0;
+  static int candidateCar = 0;
+  static int confirmCount = 0;
 
   // Run auto-test (cycles through all cars)
   runAutoTest();
@@ -182,8 +204,8 @@ void loop() {
     }
 
     // Debug: show real-time pulse info
-    if (DEBUG_MODE && pulseCount > 0 && pulseCount % 5 == 0) {
-      float freq = calculateAverageFrequency();
+    if (DEBUG_MODE && pulseCount > 0 && pulseCount % 10 == 0) {
+      float freq = calculateMedianFrequency();
       Serial.printf("  [DEBUG] pulses: %d, interval: %lu us, freq: %.0f Hz\n",
                     pulseCount, pulseInterval, freq);
     }
@@ -191,19 +213,30 @@ void loop() {
 
   // Check if we have enough data to identify
   if (detecting && pulseCount >= MIN_PULSES_FOR_ID) {
-    float freq = calculateAverageFrequency();
+    float freq = calculateMedianFrequency();
     int car = identifyCar(freq);
 
-    if (car > 0 && car != lastCarDetected) {
-      unsigned long timestamp = millis();
-      Serial.printf("[%lu ms] CAR %d detected (freq: %.0f Hz)\n", timestamp, car, freq);
-      lastCarDetected = car;
+    if (car > 0) {
+      // Confirmation logic: require consistent readings
+      if (car == candidateCar) {
+        confirmCount++;
+      } else {
+        candidateCar = car;
+        confirmCount = 1;
+      }
+
+      // Only report when confirmed and different from last
+      if (confirmCount >= CONFIRM_COUNT && car != lastCarDetected) {
+        unsigned long timestamp = millis();
+        Serial.printf("[%lu ms] CAR %d detected (freq: %.0f Hz)\n", timestamp, car, freq);
+        lastCarDetected = car;
+      }
     }
   }
 
   // Check for timeout (car has passed)
   if (detecting && (micros() - lastActivityTime > DETECTION_TIMEOUT)) {
-    float freq = calculateAverageFrequency();
+    float freq = calculateMedianFrequency();
 
     if (lastCarDetected > 0) {
       Serial.printf("Car %d passed (final freq: %.0f Hz, pulses: %d)\n", lastCarDetected, freq, pulseCount);
@@ -224,6 +257,8 @@ void loop() {
 
     detecting = false;
     lastCarDetected = 0;
+    candidateCar = 0;
+    confirmCount = 0;
     lastPulseTime = 0;
     resetDetection();
   }
