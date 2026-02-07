@@ -1,14 +1,33 @@
 #include <Arduino.h>
 
 // Phototransistor connected to this GPIO (must support interrupts)
-// Wiring: 3.3V -- [4.7kΩ] --+-- GPIO
-//                           |
-//                       Collector (short leg)
-//                        TEFT4300
-//                       Emitter (long leg)
-//                           |
-//                          GND
+// Wiring (common emitter with noise filter):
+//
+//         3.3V
+//           |
+//         [4.7kΩ]
+//           |
+//           +-------- GPIO 4
+//           |
+//     +-----+-----+
+//     |           |
+//   [22nF]    Collector (short leg)
+//     |        TEFT4300
+//    GND      Emitter (long leg)
+//                 |
+//                GND
 const int IR_SENSOR_PIN = 4;
+
+// ========== TEST MODE ==========
+// Set to true to enable test signal output
+// Connect IR LED: GPIO 5 --[220Ω]-- LED anode, cathode to GND
+// Point LED at phototransistor to simulate car passing
+const bool TEST_MODE = true;
+const int TEST_LED_PIN = 5;
+int testCarIndex = 0;  // Which car to simulate (0-5)
+
+// Debug mode - shows real-time frequency measurements
+const bool DEBUG_MODE = true;
 
 // Scalextric Digital car frequencies (Hz)
 // Car 1: 5500 Hz, Car 2: 4400 Hz, Car 3: 3700 Hz
@@ -101,12 +120,56 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(IR_SENSOR_PIN), onPulseDetected, FALLING);
 
   Serial.printf("Listening on GPIO %d...\n\n", IR_SENSOR_PIN);
+
+  if (DEBUG_MODE) {
+    Serial.println("*** DEBUG MODE ENABLED - showing real-time frequency ***\n");
+  }
+
+  if (TEST_MODE) {
+    pinMode(TEST_LED_PIN, OUTPUT);
+    Serial.println("*** AUTO-TEST MODE ENABLED ***");
+    Serial.printf("Test LED on GPIO %d\n", TEST_LED_PIN);
+    Serial.println("Wiring: GPIO 5 --[220R]-- IR LED --> GND");
+    Serial.println("Point LED at phototransistor");
+    Serial.println("Will auto-cycle through all 6 cars every 2 seconds\n");
+  }
+}
+
+// Test mode variables - auto cycles through all cars
+const unsigned long TEST_BURST_DURATION = 100;   // 100ms pulse burst
+const unsigned long TEST_GAP_DURATION = 2000;    // 2 seconds between tests
+unsigned long lastTestTime = 0;
+bool testBurstActive = false;
+
+void runAutoTest() {
+  if (!TEST_MODE) return;
+
+  unsigned long now = millis();
+
+  // Start a new test burst every TEST_GAP_DURATION
+  if (!testBurstActive && (now - lastTestTime > TEST_GAP_DURATION)) {
+    testCarIndex = (testCarIndex + 1) % 6;  // Cycle 0-5
+    Serial.printf("\n--- Auto-test: Simulating Car %d (%d Hz) ---\n",
+                  testCarIndex + 1, CAR_FREQUENCIES[testCarIndex]);
+    tone(TEST_LED_PIN, CAR_FREQUENCIES[testCarIndex]);
+    testBurstActive = true;
+    lastTestTime = now;
+  }
+
+  // End the burst after TEST_BURST_DURATION
+  if (testBurstActive && (now - lastTestTime > TEST_BURST_DURATION)) {
+    noTone(TEST_LED_PIN);
+    testBurstActive = false;
+  }
 }
 
 void loop() {
   static unsigned long lastActivityTime = 0;
   static bool detecting = false;
   static int lastCarDetected = 0;
+
+  // Run auto-test (cycles through all cars)
+  runAutoTest();
 
   // Check for new pulse data
   if (newPulseData) {
@@ -116,6 +179,13 @@ void loop() {
     if (!detecting) {
       detecting = true;
       Serial.println("IR pulses detected...");
+    }
+
+    // Debug: show real-time pulse info
+    if (DEBUG_MODE && pulseCount > 0 && pulseCount % 5 == 0) {
+      float freq = calculateAverageFrequency();
+      Serial.printf("  [DEBUG] pulses: %d, interval: %lu us, freq: %.0f Hz\n",
+                    pulseCount, pulseInterval, freq);
     }
   }
 
@@ -133,11 +203,23 @@ void loop() {
 
   // Check for timeout (car has passed)
   if (detecting && (micros() - lastActivityTime > DETECTION_TIMEOUT)) {
+    float freq = calculateAverageFrequency();
+
     if (lastCarDetected > 0) {
-      Serial.printf("Car %d passed\n\n", lastCarDetected);
+      Serial.printf("Car %d passed (final freq: %.0f Hz, pulses: %d)\n", lastCarDetected, freq, pulseCount);
     } else if (pulseCount > 0) {
-      float freq = calculateAverageFrequency();
-      Serial.printf("Unknown car passed (freq: %.0f Hz, pulses: %d)\n\n", freq, pulseCount);
+      Serial.printf("Unknown signal (freq: %.0f Hz, pulses: %d)\n", freq, pulseCount);
+    }
+
+    // Debug: show interval histogram
+    if (DEBUG_MODE && pulseCount > 0) {
+      Serial.print("  [DEBUG] intervals (us): ");
+      for (int i = 0; i < HISTORY_SIZE && intervalHistory[i] > 0; i++) {
+        Serial.printf("%lu ", intervalHistory[i]);
+      }
+      Serial.println("\n");
+    } else {
+      Serial.println();
     }
 
     detecting = false;
