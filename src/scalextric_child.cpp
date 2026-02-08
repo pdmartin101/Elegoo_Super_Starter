@@ -3,18 +3,18 @@
 #include <esp_now.h>
 
 // Scalextric Car Detector - ESP-NOW Child Node
-// Detects cars and sends events to parent via ESP-NOW
+// Detects cars and broadcasts events via ESP-NOW (zero-config)
 //
 // Output format: NODE:SENSOR:CAR:FREQ:TIME
 // e.g., 0:2:3:3704:12345 = Node 0, Sensor 2, Car 3, 3704 Hz, timestamp
 //
-// Sensor naming is done in the PC app, not here
+// Only config needed: set NODE_ID (0, 1, 2, etc.) for each child
 
 // ========== CONFIGURATION ==========
 const uint8_t NODE_ID = 0;  // Change this for each child (0, 1, 2, etc.)
 
-// Parent ESP32 MAC address (get from parent serial output)
-uint8_t parentMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};  // Broadcast for testing
+// Broadcast address - no parent MAC needed
+const uint8_t BROADCAST[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 // Sensor GPIO pins
 const int SENSOR_PINS[] = {4, 5, 16, 17};
@@ -179,7 +179,7 @@ void sendCarEvent(uint8_t sensorId, int car, float freq) {
   event.frequency = (uint16_t)freq;
   event.timestamp = millis();
 
-  esp_err_t result = esp_now_send(parentMac, (uint8_t*)&event, sizeof(event));
+  esp_err_t result = esp_now_send(BROADCAST, (uint8_t*)&event, sizeof(event));
   if (result == ESP_OK) {
     Serial.printf("SENT: %d:%d:%d:%d:%lu\n", NODE_ID, sensorId, car, (int)freq, event.timestamp);
   } else {
@@ -243,7 +243,7 @@ void setup() {
   esp_now_register_send_cb(onDataSent);
 
   // Register parent peer
-  memcpy(peerInfo.peer_addr, parentMac, 6);
+  memcpy(peerInfo.peer_addr, BROADCAST, 6);
   peerInfo.channel = 0;
   peerInfo.encrypt = false;
 
