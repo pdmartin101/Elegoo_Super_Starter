@@ -5,26 +5,20 @@
 // Scalextric Car Detector - ESP-NOW Child Node
 // Detects cars and sends events to parent via ESP-NOW
 //
-// Each child has a unique NODE_ID (set before flashing)
-// Parent MAC address must be configured below
+// Output format: NODE:SENSOR:CAR:FREQ:TIME
+// e.g., 0:2:3:3704:12345 = Node 0, Sensor 2, Car 3, 3704 Hz, timestamp
+//
+// Sensor naming is done in the PC app, not here
 
 // ========== CONFIGURATION ==========
-const uint8_t NODE_ID = 1;  // Change this for each child (1, 2, 3, etc.)
+const uint8_t NODE_ID = 0;  // Change this for each child (0, 1, 2, etc.)
 
 // Parent ESP32 MAC address (get from parent serial output)
 uint8_t parentMac[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};  // Broadcast for testing
 
-// Sensor GPIO pins (adjust per node)
-const int SENSOR_A_PIN = 4;
-const int SENSOR_B_PIN = 5;
-const int SENSOR_C_PIN = 16;
-const int SENSOR_D_PIN = 17;
-
-// Sensor names (adjust per node location)
-const char* SENSOR_A_NAME = "START1";
-const char* SENSOR_B_NAME = "START2";
-const char* SENSOR_C_NAME = "PIT_IN";
-const char* SENSOR_D_NAME = "PIT_OUT";
+// Sensor GPIO pins
+const int SENSOR_PINS[] = {4, 5, 16, 17};
+const int NUM_SENSORS = 4;
 
 // ========== CAR DETECTION ==========
 const int CAR_FREQUENCIES[] = {5500, 4400, 3700, 3100, 2800, 2400};
@@ -36,10 +30,10 @@ const unsigned long DETECTION_TIMEOUT = 50000;
 const int CONFIRM_COUNT = 3;
 const int HISTORY_SIZE = 10;
 
-// ESP-NOW message structure
+// ESP-NOW message structure (compact)
 struct CarEvent {
   uint8_t nodeId;
-  char sensor[12];
+  uint8_t sensorId;
   uint8_t carNumber;
   uint16_t frequency;
   uint32_t timestamp;
@@ -47,7 +41,7 @@ struct CarEvent {
 
 // Sensor state structure
 struct SensorState {
-  const char* name;
+  uint8_t id;
   int pin;
   volatile unsigned long lastPulseTime;
   volatile unsigned long pulseInterval;
@@ -63,69 +57,72 @@ struct SensorState {
 };
 
 // Four sensor instances
-SensorState sensorA = {SENSOR_A_NAME, SENSOR_A_PIN, 0, 0, 0, false, {0}, 0, 0, false, 0, 0, 0};
-SensorState sensorB = {SENSOR_B_NAME, SENSOR_B_PIN, 0, 0, 0, false, {0}, 0, 0, false, 0, 0, 0};
-SensorState sensorC = {SENSOR_C_NAME, SENSOR_C_PIN, 0, 0, 0, false, {0}, 0, 0, false, 0, 0, 0};
-SensorState sensorD = {SENSOR_D_NAME, SENSOR_D_PIN, 0, 0, 0, false, {0}, 0, 0, false, 0, 0, 0};
+SensorState sensors[NUM_SENSORS];
 
 esp_now_peer_info_t peerInfo;
 
-// ISRs for each sensor
-void IRAM_ATTR onPulseA() {
+// ISRs for each sensor (must be separate functions)
+void IRAM_ATTR onPulse0() {
   unsigned long now = micros();
-  if (sensorA.lastPulseTime > 0) {
-    sensorA.pulseInterval = now - sensorA.lastPulseTime;
-    if (sensorA.pulseInterval >= MIN_VALID_INTERVAL && sensorA.pulseInterval <= MAX_VALID_INTERVAL) {
-      sensorA.intervalHistory[sensorA.historyIndex] = sensorA.pulseInterval;
-      sensorA.historyIndex = (sensorA.historyIndex + 1) % HISTORY_SIZE;
-      sensorA.pulseCount++;
-      sensorA.newPulseData = true;
+  SensorState& s = sensors[0];
+  if (s.lastPulseTime > 0) {
+    s.pulseInterval = now - s.lastPulseTime;
+    if (s.pulseInterval >= MIN_VALID_INTERVAL && s.pulseInterval <= MAX_VALID_INTERVAL) {
+      s.intervalHistory[s.historyIndex] = s.pulseInterval;
+      s.historyIndex = (s.historyIndex + 1) % HISTORY_SIZE;
+      s.pulseCount++;
+      s.newPulseData = true;
     }
   }
-  sensorA.lastPulseTime = now;
+  s.lastPulseTime = now;
 }
 
-void IRAM_ATTR onPulseB() {
+void IRAM_ATTR onPulse1() {
   unsigned long now = micros();
-  if (sensorB.lastPulseTime > 0) {
-    sensorB.pulseInterval = now - sensorB.lastPulseTime;
-    if (sensorB.pulseInterval >= MIN_VALID_INTERVAL && sensorB.pulseInterval <= MAX_VALID_INTERVAL) {
-      sensorB.intervalHistory[sensorB.historyIndex] = sensorB.pulseInterval;
-      sensorB.historyIndex = (sensorB.historyIndex + 1) % HISTORY_SIZE;
-      sensorB.pulseCount++;
-      sensorB.newPulseData = true;
+  SensorState& s = sensors[1];
+  if (s.lastPulseTime > 0) {
+    s.pulseInterval = now - s.lastPulseTime;
+    if (s.pulseInterval >= MIN_VALID_INTERVAL && s.pulseInterval <= MAX_VALID_INTERVAL) {
+      s.intervalHistory[s.historyIndex] = s.pulseInterval;
+      s.historyIndex = (s.historyIndex + 1) % HISTORY_SIZE;
+      s.pulseCount++;
+      s.newPulseData = true;
     }
   }
-  sensorB.lastPulseTime = now;
+  s.lastPulseTime = now;
 }
 
-void IRAM_ATTR onPulseC() {
+void IRAM_ATTR onPulse2() {
   unsigned long now = micros();
-  if (sensorC.lastPulseTime > 0) {
-    sensorC.pulseInterval = now - sensorC.lastPulseTime;
-    if (sensorC.pulseInterval >= MIN_VALID_INTERVAL && sensorC.pulseInterval <= MAX_VALID_INTERVAL) {
-      sensorC.intervalHistory[sensorC.historyIndex] = sensorC.pulseInterval;
-      sensorC.historyIndex = (sensorC.historyIndex + 1) % HISTORY_SIZE;
-      sensorC.pulseCount++;
-      sensorC.newPulseData = true;
+  SensorState& s = sensors[2];
+  if (s.lastPulseTime > 0) {
+    s.pulseInterval = now - s.lastPulseTime;
+    if (s.pulseInterval >= MIN_VALID_INTERVAL && s.pulseInterval <= MAX_VALID_INTERVAL) {
+      s.intervalHistory[s.historyIndex] = s.pulseInterval;
+      s.historyIndex = (s.historyIndex + 1) % HISTORY_SIZE;
+      s.pulseCount++;
+      s.newPulseData = true;
     }
   }
-  sensorC.lastPulseTime = now;
+  s.lastPulseTime = now;
 }
 
-void IRAM_ATTR onPulseD() {
+void IRAM_ATTR onPulse3() {
   unsigned long now = micros();
-  if (sensorD.lastPulseTime > 0) {
-    sensorD.pulseInterval = now - sensorD.lastPulseTime;
-    if (sensorD.pulseInterval >= MIN_VALID_INTERVAL && sensorD.pulseInterval <= MAX_VALID_INTERVAL) {
-      sensorD.intervalHistory[sensorD.historyIndex] = sensorD.pulseInterval;
-      sensorD.historyIndex = (sensorD.historyIndex + 1) % HISTORY_SIZE;
-      sensorD.pulseCount++;
-      sensorD.newPulseData = true;
+  SensorState& s = sensors[3];
+  if (s.lastPulseTime > 0) {
+    s.pulseInterval = now - s.lastPulseTime;
+    if (s.pulseInterval >= MIN_VALID_INTERVAL && s.pulseInterval <= MAX_VALID_INTERVAL) {
+      s.intervalHistory[s.historyIndex] = s.pulseInterval;
+      s.historyIndex = (s.historyIndex + 1) % HISTORY_SIZE;
+      s.pulseCount++;
+      s.newPulseData = true;
     }
   }
-  sensorD.lastPulseTime = now;
+  s.lastPulseTime = now;
 }
+
+void (*isrFunctions[])() = {onPulse0, onPulse1, onPulse2, onPulse3};
 
 int identifyCar(float frequency) {
   int bestCar = 0;
@@ -174,20 +171,19 @@ void resetSensor(SensorState& sensor) {
   sensor.confirmCount = 0;
 }
 
-void sendCarEvent(const char* sensorName, int car, float freq) {
+void sendCarEvent(uint8_t sensorId, int car, float freq) {
   CarEvent event;
   event.nodeId = NODE_ID;
-  strncpy(event.sensor, sensorName, sizeof(event.sensor) - 1);
-  event.sensor[sizeof(event.sensor) - 1] = '\0';
+  event.sensorId = sensorId;
   event.carNumber = car;
   event.frequency = (uint16_t)freq;
   event.timestamp = millis();
 
   esp_err_t result = esp_now_send(parentMac, (uint8_t*)&event, sizeof(event));
   if (result == ESP_OK) {
-    Serial.printf("SENT: %s Car %d (%d Hz)\n", sensorName, car, (int)freq);
+    Serial.printf("SENT: %d:%d:%d:%d:%lu\n", NODE_ID, sensorId, car, (int)freq, event.timestamp);
   } else {
-    Serial.printf("SEND FAILED: %s Car %d\n", sensorName, car);
+    Serial.printf("SEND FAILED: %d:%d\n", NODE_ID, sensorId);
   }
 }
 
@@ -213,7 +209,7 @@ void processSensor(SensorState& sensor) {
       }
 
       if (sensor.confirmCount >= CONFIRM_COUNT && car != sensor.lastCarDetected) {
-        sendCarEvent(sensor.name, car, freq);
+        sendCarEvent(sensor.id, car, freq);
         sensor.lastCarDetected = car;
       }
     }
@@ -257,28 +253,36 @@ void setup() {
   }
 
   // Setup sensors
-  pinMode(SENSOR_A_PIN, INPUT);
-  pinMode(SENSOR_B_PIN, INPUT);
-  pinMode(SENSOR_C_PIN, INPUT);
-  pinMode(SENSOR_D_PIN, INPUT);
-
-  attachInterrupt(digitalPinToInterrupt(SENSOR_A_PIN), onPulseA, FALLING);
-  attachInterrupt(digitalPinToInterrupt(SENSOR_B_PIN), onPulseB, FALLING);
-  attachInterrupt(digitalPinToInterrupt(SENSOR_C_PIN), onPulseC, FALLING);
-  attachInterrupt(digitalPinToInterrupt(SENSOR_D_PIN), onPulseD, FALLING);
-
   Serial.println("\nSensors:");
-  Serial.printf("  %s - GPIO %d\n", SENSOR_A_NAME, SENSOR_A_PIN);
-  Serial.printf("  %s - GPIO %d\n", SENSOR_B_NAME, SENSOR_B_PIN);
-  Serial.printf("  %s - GPIO %d\n", SENSOR_C_NAME, SENSOR_C_PIN);
-  Serial.printf("  %s - GPIO %d\n", SENSOR_D_NAME, SENSOR_D_PIN);
-  Serial.println("\nWaiting for cars...\n");
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    sensors[i].id = i;
+    sensors[i].pin = SENSOR_PINS[i];
+    sensors[i].lastPulseTime = 0;
+    sensors[i].pulseInterval = 0;
+    sensors[i].pulseCount = 0;
+    sensors[i].newPulseData = false;
+    sensors[i].historyIndex = 0;
+    sensors[i].lastActivityTime = 0;
+    sensors[i].detecting = false;
+    sensors[i].lastCarDetected = 0;
+    sensors[i].candidateCar = 0;
+    sensors[i].confirmCount = 0;
+    for (int j = 0; j < HISTORY_SIZE; j++) {
+      sensors[i].intervalHistory[j] = 0;
+    }
+
+    pinMode(SENSOR_PINS[i], INPUT);
+    attachInterrupt(digitalPinToInterrupt(SENSOR_PINS[i]), isrFunctions[i], FALLING);
+    Serial.printf("  %d:%d - GPIO %d\n", NODE_ID, i, SENSOR_PINS[i]);
+  }
+
+  Serial.println("\nFormat: NODE:SENSOR:CAR:FREQ:TIME");
+  Serial.println("Waiting for cars...\n");
 }
 
 void loop() {
-  processSensor(sensorA);
-  processSensor(sensorB);
-  processSensor(sensorC);
-  processSensor(sensorD);
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    processSensor(sensors[i]);
+  }
   delay(1);
 }

@@ -4,12 +4,14 @@
 
 // Scalextric Car Detector - ESP-NOW Parent Node
 // Receives car detection events from child nodes via ESP-NOW
-// Outputs to Serial (can be extended to WiFi/WebSocket)
+// Outputs to Serial in format: NODE:SENSOR:CAR:FREQ:TIME
+//
+// e.g., 0:2:3:3704:12345 = Node 0, Sensor 2, Car 3, 3704 Hz, timestamp
 
 // ESP-NOW message structure (must match child)
 struct CarEvent {
   uint8_t nodeId;
-  char sensor[12];
+  uint8_t sensorId;
   uint8_t carNumber;
   uint16_t frequency;
   uint32_t timestamp;
@@ -29,10 +31,10 @@ void onDataReceived(const esp_now_recv_info_t* info, const uint8_t* data, int le
   CarEvent event;
   memcpy(&event, data, sizeof(event));
 
-  // Format: NODE:SENSOR:CAR:FREQ:TIME
-  Serial.printf("N%d:%s:Car%d:%dHz:%lu\n",
+  // Output format: NODE:SENSOR:CAR:FREQ:TIME
+  Serial.printf("%d:%d:%d:%d:%lu\n",
                 event.nodeId,
-                event.sensor,
+                event.sensorId,
                 event.carNumber,
                 event.frequency,
                 event.timestamp);
@@ -49,7 +51,7 @@ void onDataReceived(const esp_now_recv_info_t* info, const uint8_t* data, int le
   if (!known && childCount < MAX_CHILDREN) {
     memcpy(childMacs[childCount], info->src_addr, 6);
     childCount++;
-    Serial.printf("New child registered: %02X:%02X:%02X:%02X:%02X:%02X (Node %d)\n",
+    Serial.printf("# New child: %02X:%02X:%02X:%02X:%02X:%02X (Node %d)\n",
                   info->src_addr[0], info->src_addr[1], info->src_addr[2],
                   info->src_addr[3], info->src_addr[4], info->src_addr[5],
                   event.nodeId);
@@ -58,27 +60,27 @@ void onDataReceived(const esp_now_recv_info_t* info, const uint8_t* data, int le
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("\nScalextric Parent Node");
-  Serial.println("======================");
+  Serial.println("\n# Scalextric Parent Node");
+  Serial.println("# ======================");
 
   // Init WiFi in station mode for ESP-NOW
   WiFi.mode(WIFI_STA);
-  Serial.print("Parent MAC Address: ");
+  Serial.print("# Parent MAC: ");
   Serial.println(WiFi.macAddress());
-  Serial.println("(Use this MAC in child nodes)");
-  Serial.println();
+  Serial.println("# (Use this MAC in child nodes)");
+  Serial.println("#");
 
   // Init ESP-NOW
   if (esp_now_init() != ESP_OK) {
-    Serial.println("ESP-NOW init failed!");
+    Serial.println("# ESP-NOW init failed!");
     return;
   }
 
   // Register receive callback
   esp_now_register_recv_cb(onDataReceived);
 
-  Serial.println("Listening for child nodes...");
-  Serial.println("Output format: NODE:SENSOR:CAR:FREQ:TIME\n");
+  Serial.println("# Format: NODE:SENSOR:CAR:FREQ:TIME");
+  Serial.println("# Listening for child nodes...\n");
 }
 
 void loop() {
