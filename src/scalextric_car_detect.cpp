@@ -1,6 +1,6 @@
 #include <Arduino.h>
 
-// Scalextric Digital Car Detector - Dual Sensor Version
+// Scalextric Digital Car Detector - 4 Sensor Version
 // Detects cars 1-6 by their unique IR pulse frequencies
 //
 // Phototransistor wiring (common emitter config):
@@ -20,8 +20,10 @@
 //                GND
 
 // Sensor GPIO pins
-const int SENSOR_A_PIN = 4;  // First phototransistor
-const int SENSOR_B_PIN = 5;  // Second phototransistor
+const int SENSOR_A_PIN = 4;   // Start Lane 1
+const int SENSOR_B_PIN = 5;   // Start Lane 2
+const int SENSOR_C_PIN = 16;  // Pit Entry
+const int SENSOR_D_PIN = 17;  // Pit Exit
 
 // Scalextric Digital car frequencies (Hz)
 // Car 1: 5500 Hz, Car 2: 4400 Hz, Car 3: 3700 Hz
@@ -58,9 +60,11 @@ struct SensorState {
   int confirmCount;
 };
 
-// Two sensor instances
-SensorState sensorA = {"A", SENSOR_A_PIN, 0, 0, 0, false, {0}, 0, 0, false, 0, 0, 0};
-SensorState sensorB = {"B", SENSOR_B_PIN, 0, 0, 0, false, {0}, 0, 0, false, 0, 0, 0};
+// Four sensor instances
+SensorState sensorA = {"START1", SENSOR_A_PIN, 0, 0, 0, false, {0}, 0, 0, false, 0, 0, 0};
+SensorState sensorB = {"START2", SENSOR_B_PIN, 0, 0, 0, false, {0}, 0, 0, false, 0, 0, 0};
+SensorState sensorC = {"PIT_IN", SENSOR_C_PIN, 0, 0, 0, false, {0}, 0, 0, false, 0, 0, 0};
+SensorState sensorD = {"PIT_OUT", SENSOR_D_PIN, 0, 0, 0, false, {0}, 0, 0, false, 0, 0, 0};
 
 // ISR for sensor A
 void IRAM_ATTR onPulseA() {
@@ -90,6 +94,36 @@ void IRAM_ATTR onPulseB() {
     }
   }
   sensorB.lastPulseTime = now;
+}
+
+// ISR for sensor C
+void IRAM_ATTR onPulseC() {
+  unsigned long now = micros();
+  if (sensorC.lastPulseTime > 0) {
+    sensorC.pulseInterval = now - sensorC.lastPulseTime;
+    if (sensorC.pulseInterval >= MIN_VALID_INTERVAL && sensorC.pulseInterval <= MAX_VALID_INTERVAL) {
+      sensorC.intervalHistory[sensorC.historyIndex] = sensorC.pulseInterval;
+      sensorC.historyIndex = (sensorC.historyIndex + 1) % HISTORY_SIZE;
+      sensorC.pulseCount++;
+      sensorC.newPulseData = true;
+    }
+  }
+  sensorC.lastPulseTime = now;
+}
+
+// ISR for sensor D
+void IRAM_ATTR onPulseD() {
+  unsigned long now = micros();
+  if (sensorD.lastPulseTime > 0) {
+    sensorD.pulseInterval = now - sensorD.lastPulseTime;
+    if (sensorD.pulseInterval >= MIN_VALID_INTERVAL && sensorD.pulseInterval <= MAX_VALID_INTERVAL) {
+      sensorD.intervalHistory[sensorD.historyIndex] = sensorD.pulseInterval;
+      sensorD.historyIndex = (sensorD.historyIndex + 1) % HISTORY_SIZE;
+      sensorD.pulseCount++;
+      sensorD.newPulseData = true;
+    }
+  }
+  sensorD.lastPulseTime = now;
 }
 
 int identifyCar(float frequency) {
@@ -172,7 +206,7 @@ void processSensor(SensorState& sensor) {
 
       // Report when confirmed and different from last
       if (sensor.confirmCount >= CONFIRM_COUNT && car != sensor.lastCarDetected) {
-        Serial.printf("SENSOR %s: Car %d (%.0f Hz)\n", sensor.name, car, freq);
+        Serial.printf("%s: Car %d (%.0f Hz)\n", sensor.name, car, freq);
         sensor.lastCarDetected = car;
       }
     }
@@ -182,7 +216,7 @@ void processSensor(SensorState& sensor) {
   if (sensor.detecting && (micros() - sensor.lastActivityTime > DETECTION_TIMEOUT)) {
     if (sensor.lastCarDetected == 0 && sensor.pulseCount > 0) {
       float freq = calculateMedianFrequency(sensor.intervalHistory);
-      Serial.printf("SENSOR %s: Unknown signal (%.0f Hz, %d pulses)\n",
+      Serial.printf("%s: Unknown signal (%.0f Hz, %d pulses)\n",
                     sensor.name, freq, sensor.pulseCount);
     }
     resetSensor(sensor);
@@ -191,8 +225,8 @@ void processSensor(SensorState& sensor) {
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("\nScalextric Car Detector - Dual Sensor");
-  Serial.println("=====================================");
+  Serial.println("\nScalextric Car Detector - 4 Sensor");
+  Serial.println("==================================");
   Serial.println("Car frequencies:");
   Serial.println("  Car 1: 5500 Hz");
   Serial.println("  Car 2: 4400 Hz");
@@ -204,17 +238,26 @@ void setup() {
 
   pinMode(SENSOR_A_PIN, INPUT);
   pinMode(SENSOR_B_PIN, INPUT);
+  pinMode(SENSOR_C_PIN, INPUT);
+  pinMode(SENSOR_D_PIN, INPUT);
 
   attachInterrupt(digitalPinToInterrupt(SENSOR_A_PIN), onPulseA, FALLING);
   attachInterrupt(digitalPinToInterrupt(SENSOR_B_PIN), onPulseB, FALLING);
+  attachInterrupt(digitalPinToInterrupt(SENSOR_C_PIN), onPulseC, FALLING);
+  attachInterrupt(digitalPinToInterrupt(SENSOR_D_PIN), onPulseD, FALLING);
 
-  Serial.printf("Sensor A on GPIO %d\n", SENSOR_A_PIN);
-  Serial.printf("Sensor B on GPIO %d\n", SENSOR_B_PIN);
+  Serial.println("Sensors:");
+  Serial.printf("  START1  - GPIO %d (Start Lane 1)\n", SENSOR_A_PIN);
+  Serial.printf("  START2  - GPIO %d (Start Lane 2)\n", SENSOR_B_PIN);
+  Serial.printf("  PIT_IN  - GPIO %d (Pit Entry)\n", SENSOR_C_PIN);
+  Serial.printf("  PIT_OUT - GPIO %d (Pit Exit)\n", SENSOR_D_PIN);
   Serial.println("\nWaiting for cars...\n");
 }
 
 void loop() {
   processSensor(sensorA);
   processSensor(sensorB);
+  processSensor(sensorC);
+  processSensor(sensorD);
   delay(1);
 }
