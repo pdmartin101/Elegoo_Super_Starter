@@ -4,17 +4,22 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <WebSocketsServer.h>
+#include <ESPmDNS.h>
+#include "wifi_credentials.h"
 
 // Scalextric Car Detector - ESP-NOW Parent Node
 // Detects cars locally AND receives events from child nodes via ESP-NOW
-// Outputs to Serial in format: NODE:SENSOR:CAR:FREQ:TIME
-// Displays last detection on 128x64 OLED (I2C: SDA=21, SCL=22)
+// Serves car events via WebSocket on port 81
+// Discoverable via mDNS at scalextric.local
 //
-// e.g., P:2:3:3704:12345 = Parent, Sensor 2, Car 3, 3704 Hz, timestamp
+// Output format: NODE:SENSOR:CAR:FREQ:TIME
+// e.g., 255:2:3:3704:12345 = Parent, Sensor 2, Car 3, 3704 Hz, timestamp
 //       0:2:3:3704:12345 = Child Node 0, Sensor 2, Car 3, 3704 Hz, timestamp
 
 // ========== CONFIGURATION ==========
 const uint8_t PARENT_NODE_ID = 255;  // Parent uses 255 to distinguish from children
+const int WEBSOCKET_PORT = 81;
 
 // Sensor GPIO pins (same as child)
 const int SENSOR_PINS[] = {4, 5, 16, 17};
@@ -35,6 +40,9 @@ const int HISTORY_SIZE = 10;
 #define SCREEN_HEIGHT 64
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 bool hasDisplay = false;
+
+// WebSocket server
+WebSocketsServer webSocket = WebSocketsServer(WEBSOCKET_PORT);
 
 // ESP-NOW message structure (must match child)
 struct CarEvent {
@@ -189,6 +197,15 @@ void resetSensor(SensorState& sensor) {
   sensor.confirmCount = 0;
 }
 
+void broadcastEvent(CarEvent& event) {
+  // Format event as text and send to all WebSocket clients
+  char msg[64];
+  snprintf(msg, sizeof(msg), "%d:%d:%d:%d:%lu",
+           event.nodeId, event.sensorId, event.carNumber,
+           event.frequency, event.timestamp);
+  webSocket.broadcastTXT(msg);
+}
+
 void logEvent(CarEvent& event) {
   lastEvent = event;
   for (int i = LOG_SIZE - 1; i > 0; i--) {
@@ -197,6 +214,8 @@ void logEvent(CarEvent& event) {
   eventLog[0] = event;
   if (logCount < LOG_SIZE) logCount++;
   displayNeedsUpdate = true;
+
+  broadcastEvent(event);
 }
 
 void onLocalCarDetected(uint8_t sensorId, int car, float freq) {
@@ -256,7 +275,6 @@ void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
   CarEvent event;
   memcpy(&event, data, sizeof(event));
 
-  // Output format: NODE:SENSOR:CAR:FREQ:TIME
   Serial.printf("%d:%d:%d:%d:%lu\n",
                 event.nodeId,
                 event.sensorId,
@@ -281,6 +299,22 @@ void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
     Serial.printf("# New child: %02X:%02X:%02X:%02X:%02X:%02X (Node %d)\n",
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
                   event.nodeId);
+  }
+}
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
+  switch (type) {
+    case WStype_CONNECTED:
+      Serial.printf("# WebSocket client %d connected\n", num);
+      break;
+    case WStype_DISCONNECTED:
+      Serial.printf("# WebSocket client %d disconnected\n", num);
+      break;
+    case WStype_TEXT:
+      // Could handle commands from C# app here in future
+      break;
+    default:
+      break;
   }
 }
 
@@ -332,26 +366,74 @@ void setup() {
     display.setTextSize(1);
     display.setCursor(0, 0);
     display.println("Scalextric Parent");
-    display.println("Waiting for cars...");
+    display.println("Connecting WiFi...");
     display.display();
     Serial.println("# OLED: OK");
   } else {
     Serial.println("# OLED: not found (continuing without display)");
   }
 
-  // Init WiFi in station mode for ESP-NOW
+  // Connect to WiFi (needed for WebSocket server)
   WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.printf("# Connecting to %s", WIFI_SSID);
+
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("\n# WiFi connected: %s\n", WiFi.localIP().toString().c_str());
+
+    // Start mDNS
+    if (MDNS.begin("scalextric")) {
+      MDNS.addService("ws", "tcp", WEBSOCKET_PORT);
+      Serial.println("# mDNS: scalextric.local");
+    } else {
+      Serial.println("# mDNS: failed to start");
+    }
+
+    // Start WebSocket server
+    webSocket.begin();
+    webSocket.onEvent(webSocketEvent);
+    Serial.printf("# WebSocket server on port %d\n", WEBSOCKET_PORT);
+
+    if (hasDisplay) {
+      display.clearDisplay();
+      display.setTextSize(1);
+      display.setCursor(0, 0);
+      display.println("Scalextric Parent");
+      display.printf("IP: %s\n", WiFi.localIP().toString().c_str());
+      display.println("scalextric.local:81");
+      display.println("Waiting for cars...");
+      display.display();
+    }
+  } else {
+    Serial.println("\n# WiFi: FAILED (WebSocket disabled)");
+    if (hasDisplay) {
+      display.clearDisplay();
+      display.setTextSize(1);
+      display.setCursor(0, 0);
+      display.println("Scalextric Parent");
+      display.println("WiFi FAILED");
+      display.println("Local sensors only");
+      display.display();
+    }
+  }
+
   Serial.print("# Parent MAC: ");
   Serial.println(WiFi.macAddress());
   Serial.println("#");
 
-  // Init ESP-NOW
+  // Init ESP-NOW (works alongside WiFi STA)
   if (esp_now_init() != ESP_OK) {
     Serial.println("# ESP-NOW init failed!");
     return;
   }
 
-  // Register receive callback
   esp_now_register_recv_cb(onDataReceived);
 
   // Setup local sensors
@@ -385,6 +467,7 @@ void setup() {
 }
 
 void loop() {
+  webSocket.loop();
   for (int i = 0; i < NUM_SENSORS; i++) {
     processSensor(sensors[i]);
   }
