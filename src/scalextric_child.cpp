@@ -1,9 +1,13 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
 // Scalextric Car Detector - ESP-NOW Child Node
 // Detects cars and broadcasts events via ESP-NOW (zero-config)
+// Displays last detection on 128x64 OLED (I2C: SDA=21, SCL=22)
 //
 // Output format: NODE:SENSOR:CAR:FREQ:TIME
 // e.g., 0:2:3:3704:12345 = Node 0, Sensor 2, Car 3, 3704 Hz, timestamp
@@ -29,6 +33,28 @@ const int MIN_PULSES_FOR_ID = 10;
 const unsigned long DETECTION_TIMEOUT = 50000;
 const int CONFIRM_COUNT = 3;
 const int HISTORY_SIZE = 10;
+
+// OLED display
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+bool hasDisplay = false;
+
+// Display state
+volatile bool displayNeedsUpdate = false;
+uint8_t lastDetectedSensor = 0;
+uint8_t lastDetectedCar = 0;
+uint16_t lastDetectedFreq = 0;
+
+// Recent events log
+const int LOG_SIZE = 3;
+struct LogEntry {
+  uint8_t sensorId;
+  uint8_t carNumber;
+  uint16_t frequency;
+};
+LogEntry eventLog[LOG_SIZE];
+int logCount = 0;
 
 // ESP-NOW message structure (compact)
 struct CarEvent {
@@ -185,6 +211,17 @@ void sendCarEvent(uint8_t sensorId, int car, float freq) {
   } else {
     Serial.printf("SEND FAILED: %d:%d\n", NODE_ID, sensorId);
   }
+
+  // Update display state
+  lastDetectedSensor = sensorId;
+  lastDetectedCar = car;
+  lastDetectedFreq = (uint16_t)freq;
+  for (int i = LOG_SIZE - 1; i > 0; i--) {
+    eventLog[i] = eventLog[i - 1];
+  }
+  eventLog[0] = {sensorId, (uint8_t)car, (uint16_t)freq};
+  if (logCount < LOG_SIZE) logCount++;
+  displayNeedsUpdate = true;
 }
 
 void processSensor(SensorState& sensor) {
@@ -224,10 +261,53 @@ void onDataSent(const uint8_t* mac, esp_now_send_status_t status) {
   // Optional: handle send confirmation
 }
 
+void updateDisplay() {
+  display.clearDisplay();
+
+  // Header (size 1)
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.printf("Node %d", NODE_ID);
+
+  // Big car number (size 3 = 18x24px)
+  display.setTextSize(3);
+  display.setCursor(0, 12);
+  display.printf("Car %d", lastDetectedCar);
+
+  // Frequency and sensor (size 1)
+  display.setTextSize(1);
+  display.setCursor(0, 40);
+  display.printf("%d Hz  Sensor %d", lastDetectedFreq, lastDetectedSensor);
+
+  // Recent events log
+  display.setCursor(0, 52);
+  for (int i = 0; i < logCount && i < LOG_SIZE; i++) {
+    display.printf("S%d=C%d ", eventLog[i].sensorId, eventLog[i].carNumber);
+  }
+
+  display.display();
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.printf("\nScalextric Child Node %d\n", NODE_ID);
   Serial.println("========================");
+
+  // Init OLED
+  if (display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    hasDisplay = true;
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.printf("Child Node %d", NODE_ID);
+    display.setCursor(0, 12);
+    display.println("Waiting for cars...");
+    display.display();
+    Serial.println("OLED: OK");
+  } else {
+    Serial.println("OLED: not found (continuing without display)");
+  }
 
   // Init WiFi in station mode for ESP-NOW
   WiFi.mode(WIFI_STA);
@@ -283,6 +363,10 @@ void setup() {
 void loop() {
   for (int i = 0; i < NUM_SENSORS; i++) {
     processSensor(sensors[i]);
+  }
+  if (hasDisplay && displayNeedsUpdate) {
+    displayNeedsUpdate = false;
+    updateDisplay();
   }
   delay(1);
 }

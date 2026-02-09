@@ -1,7 +1,8 @@
 #include <Arduino.h>
+#include <Keypad.h>
 
 // Scalextric Car Detector - Interactive Test Mode
-// Press 1-6 in serial monitor to pulse IR LED at that car's frequency
+// Press 1-6 on keypad or serial monitor to pulse IR LED at that car's frequency
 //
 // Phototransistor wiring (common emitter):
 //         3.3V
@@ -17,6 +18,10 @@
 //    GND      Emitter (long leg)
 //                 |
 //                GND
+//
+// 4x4 Keypad wiring:
+//   Rows: GPIO 18, 19, 21, 22
+//   Cols: GPIO 27, 26, 25, 33
 
 const int IR_SENSOR_PIN = 4;
 const int TEST_LED_PIN = 5;
@@ -48,6 +53,19 @@ const unsigned long PULSE_DURATION = 500;  // 500ms pulse when key pressed
 unsigned long pulseStartTime = 0;
 bool pulsing = false;
 int currentTestCar = 0;
+
+// 4x4 Keypad
+const byte ROWS = 4;
+const byte COLS = 4;
+char hexaKeys[ROWS][COLS] = {
+  {'1','2','3','A'},
+  {'4','5','6','B'},
+  {'7','8','9','C'},
+  {'*','0','#','D'}
+};
+byte rowPins[ROWS] = {18, 19, 21, 22};
+byte colPins[COLS] = {27, 26, 25, 33};
+Keypad keypad = Keypad(makeKeymap(hexaKeys), rowPins, colPins, ROWS, COLS);
 
 void IRAM_ATTR onPulseDetected() {
   unsigned long now = micros();
@@ -106,11 +124,20 @@ void resetDetection() {
   }
 }
 
+void startPulse(char key) {
+  int carIndex = key - '1';  // 0-5
+  currentTestCar = carIndex + 1;  // 1-6
+  Serial.printf("\n>>> Pulsing Car %d (%d Hz) <<<\n", currentTestCar, CAR_FREQUENCIES[carIndex]);
+  tone(TEST_LED_PIN, CAR_FREQUENCIES[carIndex]);
+  pulsing = true;
+  pulseStartTime = millis();
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println("\nScalextric Test - Interactive Mode");
   Serial.println("===================================");
-  Serial.println("Press 1-6 to pulse IR LED for that car:");
+  Serial.println("Press 1-6 on keypad or serial monitor:");
   Serial.println("  1 = 5500 Hz");
   Serial.println("  2 = 4400 Hz");
   Serial.println("  3 = 3700 Hz");
@@ -139,16 +166,17 @@ void loop() {
   static int candidateCar = 0;
   static int confirmCount = 0;
 
-  // Check for keyboard input
+  // Check for keypad input
+  char key = keypad.getKey();
+  if (key >= '1' && key <= '6') {
+    startPulse(key);
+  }
+
+  // Check for serial input
   if (Serial.available()) {
     char c = Serial.read();
     if (c >= '1' && c <= '6') {
-      int carIndex = c - '1';  // 0-5
-      currentTestCar = carIndex + 1;  // 1-6
-      Serial.printf("\n>>> Pulsing Car %d (%d Hz) <<<\n", currentTestCar, CAR_FREQUENCIES[carIndex]);
-      tone(TEST_LED_PIN, CAR_FREQUENCIES[carIndex]);
-      pulsing = true;
-      pulseStartTime = millis();
+      startPulse(c);
     }
   }
 
