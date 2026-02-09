@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include <esp_wifi.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -21,9 +22,9 @@
 const uint8_t PARENT_NODE_ID = 255;  // Parent uses 255 to distinguish from children
 const int WEBSOCKET_PORT = 81;
 
-// Sensor GPIO pins (same as child)
-const int SENSOR_PINS[] = {4, 5, 16, 17};
-const int NUM_SENSORS = 4;
+// Sensor GPIO pins - only configure pins with phototransistors connected
+const int SENSOR_PINS[] = {4, 5};
+const int NUM_SENSORS = 2;
 
 // ========== CAR DETECTION ==========
 const int CAR_FREQUENCIES[] = {5500, 4400, 3700, 3100, 2800, 2400};
@@ -81,6 +82,7 @@ int childCount = 0;
 // Display state
 volatile bool displayNeedsUpdate = false;
 CarEvent lastEvent;
+int espNowRecvCount = 0;
 
 // Recent events log
 const int LOG_SIZE = 3;
@@ -267,8 +269,11 @@ void processSensor(SensorState& sensor) {
 }
 
 void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
+  espNowRecvCount++;
+  Serial.printf("# ESP-NOW recv: %d bytes from %02X:%02X:%02X:%02X:%02X:%02X\n",
+                len, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
   if (len != sizeof(CarEvent)) {
-    Serial.printf("Invalid packet size: %d\n", len);
+    Serial.printf("Invalid packet size: %d (expected %d)\n", len, sizeof(CarEvent));
     return;
   }
 
@@ -321,7 +326,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
 void updateDisplay() {
   display.clearDisplay();
 
-  // Header (size 1)
+  // Header: source + channel + ESP-NOW stats (size 1)
   display.setTextSize(1);
   display.setCursor(0, 0);
   if (lastEvent.nodeId == PARENT_NODE_ID) {
@@ -329,6 +334,7 @@ void updateDisplay() {
   } else {
     display.printf("Node %d", lastEvent.nodeId);
   }
+  display.printf("  Ch:%d RX:%d", WiFi.channel(), espNowRecvCount);
 
   // Big car number (size 3 = 18x24px)
   display.setTextSize(3);
@@ -386,7 +392,8 @@ void setup() {
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("\n# WiFi connected: %s\n", WiFi.localIP().toString().c_str());
+    esp_wifi_set_ps(WIFI_PS_NONE);  // Disable power saving - improves ESP-NOW reliability
+    Serial.printf("\n# WiFi connected: %s, Channel: %d\n", WiFi.localIP().toString().c_str(), WiFi.channel());
 
     // Start mDNS
     if (MDNS.begin("scalextric")) {
@@ -407,7 +414,7 @@ void setup() {
       display.setCursor(0, 0);
       display.println("Scalextric Parent");
       display.printf("IP: %s\n", WiFi.localIP().toString().c_str());
-      display.println("scalextric.local:81");
+      display.printf("Ch: %d  Port: %d\n", WiFi.channel(), WEBSOCKET_PORT);
       display.println("Waiting for cars...");
       display.display();
     }

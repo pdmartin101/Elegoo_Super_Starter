@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include <esp_wifi.h>
+#include "wifi_credentials.h"
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -20,9 +22,9 @@ const uint8_t NODE_ID = 0;  // Change this for each child (0, 1, 2, etc.)
 // Broadcast address - no parent MAC needed
 const uint8_t BROADCAST[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
-// Sensor GPIO pins
-const int SENSOR_PINS[] = {4, 5, 16, 17};
-const int NUM_SENSORS = 4;
+// Sensor GPIO pins - only configure pins with phototransistors connected
+const int SENSOR_PINS[] = {4, 5};
+const int NUM_SENSORS = 2;
 
 // ========== CAR DETECTION ==========
 const int CAR_FREQUENCIES[] = {5500, 4400, 3700, 3100, 2800, 2400};
@@ -45,6 +47,8 @@ volatile bool displayNeedsUpdate = false;
 uint8_t lastDetectedSensor = 0;
 uint8_t lastDetectedCar = 0;
 uint16_t lastDetectedFreq = 0;
+int sendOkCount = 0;
+int sendFailCount = 0;
 
 // Recent events log
 const int LOG_SIZE = 3;
@@ -207,9 +211,11 @@ void sendCarEvent(uint8_t sensorId, int car, float freq) {
 
   esp_err_t result = esp_now_send(BROADCAST, (uint8_t*)&event, sizeof(event));
   if (result == ESP_OK) {
+    sendOkCount++;
     Serial.printf("SENT: %d:%d:%d:%d:%lu\n", NODE_ID, sensorId, car, (int)freq, event.timestamp);
   } else {
-    Serial.printf("SEND FAILED: %d:%d\n", NODE_ID, sensorId);
+    sendFailCount++;
+    Serial.printf("SEND FAILED (err %d): %d:%d\n", result, NODE_ID, sensorId);
   }
 
   // Update display state
@@ -264,23 +270,25 @@ void onDataSent(const uint8_t* mac, esp_now_send_status_t status) {
 void updateDisplay() {
   display.clearDisplay();
 
-  // Header (size 1)
+  // Header: node + WiFi channel + send stats (size 1)
   display.setTextSize(1);
   display.setCursor(0, 0);
-  display.printf("Node %d", NODE_ID);
+  display.printf("Node %d  Ch:%d", NODE_ID, WiFi.channel());
+  display.setCursor(0, 8);
+  display.printf("TX ok:%d fail:%d", sendOkCount, sendFailCount);
 
   // Big car number (size 3 = 18x24px)
   display.setTextSize(3);
-  display.setCursor(0, 12);
+  display.setCursor(0, 18);
   display.printf("Car %d", lastDetectedCar);
 
   // Frequency and sensor (size 1)
   display.setTextSize(1);
-  display.setCursor(0, 40);
+  display.setCursor(0, 44);
   display.printf("%d Hz  Sensor %d", lastDetectedFreq, lastDetectedSensor);
 
   // Recent events log
-  display.setCursor(0, 52);
+  display.setCursor(0, 56);
   for (int i = 0; i < logCount && i < LOG_SIZE; i++) {
     display.printf("S%d=C%d ", eventLog[i].sensorId, eventLog[i].carNumber);
   }
@@ -309,10 +317,44 @@ void setup() {
     Serial.println("OLED: not found (continuing without display)");
   }
 
-  // Init WiFi in station mode for ESP-NOW
+  // Connect to WiFi so child uses same channel as parent (required for ESP-NOW)
   WiFi.mode(WIFI_STA);
   Serial.print("MAC Address: ");
   Serial.println(WiFi.macAddress());
+  Serial.printf("Connecting to WiFi '%s' for channel alignment...\n", WIFI_SSID);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    esp_wifi_set_ps(WIFI_PS_NONE);  // Disable power saving - improves ESP-NOW reliability
+    Serial.printf("\nWiFi connected. IP: %s, Channel: %d\n", WiFi.localIP().toString().c_str(), WiFi.channel());
+    if (hasDisplay) {
+      display.clearDisplay();
+      display.setCursor(0, 0);
+      display.printf("Child Node %d", NODE_ID);
+      display.setCursor(0, 12);
+      display.printf("WiFi Ch: %d", WiFi.channel());
+      display.setCursor(0, 24);
+      display.println("Waiting for cars...");
+      display.display();
+    }
+  } else {
+    Serial.println("\nWiFi failed - ESP-NOW may not reach parent on different channel");
+    if (hasDisplay) {
+      display.clearDisplay();
+      display.setCursor(0, 0);
+      display.printf("Child Node %d", NODE_ID);
+      display.setCursor(0, 12);
+      display.println("WiFi FAILED!");
+      display.setCursor(0, 24);
+      display.println("ESP-NOW may fail");
+      display.display();
+    }
+  }
 
   // Init ESP-NOW
   if (esp_now_init() != ESP_OK) {
