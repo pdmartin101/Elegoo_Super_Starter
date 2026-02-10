@@ -108,7 +108,9 @@ try
                     var nodeName = node == "255" ? "Parent" : $"Node {node}";
                     eventCount++;
 
-                    Console.WriteLine($"{DateTime.Now:HH:mm:ss.ff}  {nodeName,-8} S{sensor,-7} Car {car,-4} {freq,5} Hz  t={timestamp}");
+                    // Format ESP32 time (HH.MM.SS.mmm) with colons for display
+                    var espTime = timestamp.Replace('.', ':');
+                    Console.WriteLine($"{DateTime.Now:HH:mm:ss.ff}  {nodeName,-8} S{sensor,-7} Car {car,-4} {freq,5} Hz  @{espTime}");
                 }
                 else
                 {

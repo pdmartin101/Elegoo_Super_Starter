@@ -7,6 +7,8 @@
 #include <Adafruit_SSD1306.h>
 #include <WebSocketsServer.h>
 #include <ESPmDNS.h>
+#include <time.h>
+#include <sys/time.h>
 #include "wifi_credentials.h"
 
 // Scalextric Car Detector - ESP-NOW Parent Node
@@ -15,8 +17,8 @@
 // Discoverable via mDNS at scalextric.local
 //
 // Output format: NODE:SENSOR:CAR:FREQ:TIME
-// e.g., 255:2:3:3704:12345 = Parent, Sensor 2, Car 3, 3704 Hz, timestamp
-//       0:2:3:3704:12345 = Child Node 0, Sensor 2, Car 3, 3704 Hz, timestamp
+// e.g., 255:2:3:3704:14.23.05.123 = Parent, Sensor 2, Car 3, 3704 Hz, 14:23:05.123
+//       0:2:3:3704:14.23.05.123 = Child 0, Sensor 2, Car 3, 3704 Hz, 14:23:05.123
 
 // ========== CONFIGURATION ==========
 const uint8_t PARENT_NODE_ID = 255;  // Parent uses 255 to distinguish from children
@@ -205,12 +207,33 @@ void resetSensor(SensorState& sensor) {
   sensor.confirmCount = 0;
 }
 
+// Format current NTP time as HH.MM.SS.mmm, returns false if NTP not synced
+bool formatNtpTime(char* buf, size_t len) {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 0) || timeinfo.tm_year < (2020 - 1900)) {
+    return false;
+  }
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  int ms = tv.tv_usec / 1000;
+  snprintf(buf, len, "%02d.%02d.%02d.%03d",
+           timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, ms);
+  return true;
+}
+
 void broadcastEvent(CarEvent& event) {
   // Format event as text and send to all WebSocket clients
   char msg[64];
-  snprintf(msg, sizeof(msg), "%d:%d:%d:%d:%lu",
-           event.nodeId, event.sensorId, event.carNumber,
-           event.frequency, event.timestamp);
+  char timeBuf[16];
+  if (formatNtpTime(timeBuf, sizeof(timeBuf))) {
+    snprintf(msg, sizeof(msg), "%d:%d:%d:%d:%s",
+             event.nodeId, event.sensorId, event.carNumber,
+             event.frequency, timeBuf);
+  } else {
+    snprintf(msg, sizeof(msg), "%d:%d:%d:%d:%lu",
+             event.nodeId, event.sensorId, event.carNumber,
+             event.frequency, event.timestamp);
+  }
   webSocket.broadcastTXT(msg);
 }
 
@@ -234,9 +257,16 @@ void onLocalCarDetected(uint8_t sensorId, int car, float freq) {
   event.frequency = (uint16_t)freq;
   event.timestamp = millis();
 
-  Serial.printf("%d:%d:%d:%d:%lu\n",
-                event.nodeId, event.sensorId, event.carNumber,
-                event.frequency, event.timestamp);
+  char timeBuf[16];
+  if (formatNtpTime(timeBuf, sizeof(timeBuf))) {
+    Serial.printf("%d:%d:%d:%d:%s\n",
+                  event.nodeId, event.sensorId, event.carNumber,
+                  event.frequency, timeBuf);
+  } else {
+    Serial.printf("%d:%d:%d:%d:%lu\n",
+                  event.nodeId, event.sensorId, event.carNumber,
+                  event.frequency, event.timestamp);
+  }
 
   logEvent(event);
 }
@@ -302,12 +332,16 @@ void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
   CarEvent event;
   memcpy(&event, data, sizeof(event));
 
-  Serial.printf("%d:%d:%d:%d:%lu\n",
-                event.nodeId,
-                event.sensorId,
-                event.carNumber,
-                event.frequency,
-                event.timestamp);
+  char timeBuf[16];
+  if (formatNtpTime(timeBuf, sizeof(timeBuf))) {
+    Serial.printf("%d:%d:%d:%d:%s\n",
+                  event.nodeId, event.sensorId, event.carNumber,
+                  event.frequency, timeBuf);
+  } else {
+    Serial.printf("%d:%d:%d:%d:%lu\n",
+                  event.nodeId, event.sensorId, event.carNumber,
+                  event.frequency, event.timestamp);
+  }
 
   logEvent(event);
 
@@ -416,6 +450,16 @@ void setup() {
   if (WiFi.status() == WL_CONNECTED) {
     esp_wifi_set_ps(WIFI_PS_NONE);  // Disable power saving - improves ESP-NOW reliability
     Serial.printf("\n# WiFi connected: %s, Channel: %d\n", WiFi.localIP().toString().c_str(), WiFi.channel());
+
+    // Sync time via NTP
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+    Serial.print("# NTP sync...");
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo, 5000)) {
+      Serial.printf("OK (%02d:%02d:%02d UTC)\n", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+    } else {
+      Serial.println("failed (using millis)");
+    }
 
     // Start mDNS
     if (MDNS.begin("scalextric")) {

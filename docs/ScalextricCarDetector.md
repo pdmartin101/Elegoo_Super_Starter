@@ -1,6 +1,26 @@
 # Scalextric Digital Car Detector
 
-Detects and identifies Scalextric Digital cars (1-6) by their unique IR pulse frequencies.
+Detects and identifies Scalextric Digital cars (1-6) by their unique IR pulse frequencies using a distributed ESP32 network.
+
+## Architecture
+
+```
+  [Child 0]  [Child 1]  [Child 2]  ...
+      |           |           |
+      +--- ESP-NOW (wireless) ---+
+                  |
+             [Parent]
+              /     \
+         WiFi        Local sensors
+          |
+    WebSocket :81
+          |
+     [C# Client]
+```
+
+- **Parent** (`scalextric_parent`): Connects to WiFi, runs WebSocket server, detects cars on its own sensors, receives events from children via ESP-NOW, and forwards everything to connected clients.
+- **Child** (`scalextric_child`): Zero-config. Detects cars on its sensors and broadcasts events to the parent via ESP-NOW. Only setting: `NODE_ID` (0, 1, 2, etc.).
+- **C# Client** (`ScalextricClient`): Connects to the parent via WebSocket (auto-discovered via mDNS) and displays all events.
 
 ## Car Frequencies
 
@@ -13,7 +33,7 @@ Detects and identifies Scalextric Digital cars (1-6) by their unique IR pulse fr
 | 5   | 2800 Hz   |
 | 6   | 2400 Hz   |
 
-## Circuit Diagram
+## Sensor Circuit
 
 ### Phototransistor Detector (Common Emitter Configuration)
 
@@ -22,7 +42,7 @@ Detects and identifies Scalextric Digital cars (1-6) by their unique IR pulse fr
           |
          [4.7kΩ]
           |
-          +----------- GPIO 4 (IR_SENSOR_PIN)
+          +----------- GPIO (sensor pin)
           |
     +-----+-----+
     |           |
@@ -44,71 +64,91 @@ Detects and identifies Scalextric Digital cars (1-6) by their unique IR pulse fr
 3. Pulsed IR from car creates falling edges that trigger interrupts
 4. Frequency of pulses identifies which car (1-6)
 
-### Test LED Circuit (for auto-test mode)
+### Sensor GPIO Pins
+
+Each node (parent or child) supports up to 4 sensors:
+
+| Sensor | GPIO |
+|--------|------|
+| 0      | 4    |
+| 1      | 5    |
+| 2      | 16   |
+| 3      | 17   |
+
+Unused sensor pins use `INPUT_PULLUP` to prevent false triggers - no external resistors needed on unconnected pins.
+
+## WebSocket Message Format
+
+The parent ESP32 runs a WebSocket server on port 81. It broadcasts car detection events as plain text messages to all connected clients.
+
+### Message format
 
 ```
-        GPIO 5 (TEST_LED_PIN)
-          |
-         [220Ω]
-          |
-          +-----+
-          | LED |  Anode = Long leg (to resistor)
-          +-----+  Cathode = Short leg (to GND)
-          |
-         GND
+NODE:SENSOR:CAR:FREQ:TIME
 ```
 
-**For testing:** Point the IR LED at the phototransistor. The ESP32 will pulse the LED at each car's frequency to simulate cars passing.
+| Field  | Type       | Description |
+|--------|------------|-------------|
+| NODE   | 0-254      | Child node ID (set per child ESP32) |
+|        | 255        | Parent node (local sensors) |
+| SENSOR | 0-3        | Sensor index on that node (GPIO 4, 5, 16, 17) |
+| CAR    | 1-6        | Detected car number |
+| FREQ   | int        | Measured IR pulse frequency in Hz |
+| TIME   | HH.MM.SS.mmm | NTP time (UTC), falls back to millis if NTP unavailable |
 
-## Wiring Summary
-
-| Component | Pin | ESP32 GPIO |
-|-----------|-----|------------|
-| Phototransistor Collector | Short leg | GPIO 4 (via 4.7kΩ to 3.3V) |
-| Phototransistor Emitter | Long leg | GND |
-| Filter Capacitor 22nF | - | Collector/GPIO 4 junction to GND |
-| Test IR LED Anode | Long leg | GPIO 5 (via 220Ω) |
-| Test IR LED Cathode | Short leg | GND |
-
-## PlatformIO Environment
-
-Build with: `pio run -e scalextric_car_detect`
-
-Upload with: `pio run -e scalextric_car_detect -t upload`
-
-## Usage
-
-1. Set `TEST_MODE = true` to test with IR LED (auto-cycles through all 6 cars)
-2. Set `DEBUG_MODE = true` for real-time frequency output
-3. Set both to `false` for production use with real Scalextric cars
-
-## Expected Output
+### Examples
 
 ```
-Scalextric Car Detector
-=======================
-Car frequencies:
-  Car 1: 5500 Hz
-  Car 2: 4400 Hz
-  Car 3: 3700 Hz
-  Car 4: 3100 Hz
-  Car 5: 2800 Hz
-  Car 6: 2400 Hz
-
-Listening on GPIO 4...
-
-*** DEBUG MODE ENABLED - showing real-time frequency ***
-
-*** AUTO-TEST MODE ENABLED ***
-Test LED on GPIO 5
-Wiring: GPIO 5 --[220R]-- IR LED --> GND
-Point LED at phototransistor
-Will auto-cycle through all 6 cars every 2 seconds
-
---- Auto-test: Simulating Car 1 (5500 Hz) ---
-IR pulses detected...
-  [DEBUG] pulses: 5, interval: 181 us, freq: 5525 Hz
-[2100 ms] CAR 1 detected (freq: 5512 Hz)
-Car 1 passed (final freq: 5501 Hz, pulses: 547)
-  [DEBUG] intervals (us): 181 182 181 182 181 182 181 181 182 181
+255:0:3:3704:14.23.05.123    Parent, Sensor 0, Car 3, 3704 Hz, 14:23:05.123 UTC
+0:1:1:5512:14.23.06.450      Child 0, Sensor 1, Car 1, 5512 Hz, 14:23:06.450 UTC
+2:0:5:2803:14.23.07.891      Child 2, Sensor 0, Car 5, 2803 Hz, 14:23:07.891 UTC
 ```
+
+### Connection
+
+- **Discovery:** mDNS service `_ws._tcp` advertised as `scalextric.local`
+- **URL:** `ws://<parent-ip>:81`
+- **Protocol:** Plain WebSocket text frames, one event per message
+- **Lines starting with `#`** are comment/status messages (not car events)
+
+## ESP-NOW Channel Discovery
+
+Child nodes automatically find the parent's WiFi channel without needing WiFi credentials:
+
+1. Child scans channels 1-13, sending a 2-byte probe packet (`0xAA` + node ID) on each
+2. Parent detects the probe and responds with a unicast reply (`0xBB` + parent ID)
+3. Child locks to the channel where it received the response
+4. If no parent found after 3 rounds, child defaults to channel 1
+
+## PlatformIO
+
+### Build & Upload
+
+**Parent:**
+```
+pio run -e scalextric_parent
+pio run -e scalextric_parent -t upload
+```
+
+**Child:**
+```
+pio run -e scalextric_child
+pio run -e scalextric_child -t upload
+```
+
+### Configuration
+
+- **Parent**: Set WiFi credentials in `src/wifi_credentials.h`
+- **Child**: Set `NODE_ID` on line 18 of `src/scalextric_child.cpp` (0, 1, 2, etc.)
+- **Max children**: 10 (set by `MAX_CHILDREN` in parent)
+
+## OLED Display
+
+Both parent and child support a 128x64 SSD1306 OLED (I2C: SDA=21, SCL=22). The display shows:
+
+- Header line (yellow band): node info, channel, TX/RX stats
+- Large car number (cyan zone)
+- Frequency and sensor ID
+- Recent event log
+
+The display is optional - nodes work without it.
