@@ -2,7 +2,6 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
-#include "wifi_credentials.h"
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -22,9 +21,9 @@ const uint8_t NODE_ID = 0;  // Change this for each child (0, 1, 2, etc.)
 // Broadcast address - no parent MAC needed
 const uint8_t BROADCAST[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
-// Sensor GPIO pins - only configure pins with phototransistors connected
-const int SENSOR_PINS[] = {4, 5};
-const int NUM_SENSORS = 2;
+// Sensor GPIO pins (INPUT_PULLUP prevents false triggers on unconnected pins)
+const int SENSOR_PINS[] = {4, 5, 16, 17};
+const int NUM_SENSORS = 4;
 
 // ========== CAR DETECTION ==========
 const int CAR_FREQUENCIES[] = {5500, 4400, 3700, 3100, 2800, 2400};
@@ -68,6 +67,14 @@ struct CarEvent {
   uint16_t frequency;
   uint32_t timestamp;
 };
+
+// Channel discovery probe (must match parent)
+struct ProbeMsg {
+  uint8_t magic;    // 0xAA = request, 0xBB = response
+  uint8_t nodeId;
+};
+volatile bool probeResponseReceived = false;
+uint8_t foundChannel = 0;
 
 // Sensor state structure
 struct SensorState {
@@ -267,13 +274,57 @@ void onDataSent(const uint8_t* mac, esp_now_send_status_t status) {
   // Optional: handle send confirmation
 }
 
+void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
+  if (len == sizeof(ProbeMsg) && data[0] == 0xBB) {
+    probeResponseReceived = true;
+  }
+}
+
+bool findParentChannel() {
+  ProbeMsg probe;
+  probe.magic = 0xAA;
+  probe.nodeId = NODE_ID;
+
+  for (int round = 0; round < 3; round++) {
+    for (uint8_t ch = 1; ch <= 13; ch++) {
+      esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
+
+      if (hasDisplay) {
+        display.clearDisplay();
+        display.setTextSize(1);
+        display.setCursor(0, 0);
+        display.printf("Child Node %d", NODE_ID);
+        display.setCursor(0, 12);
+        display.printf("Scanning Ch: %d", ch);
+        display.setCursor(0, 24);
+        display.printf("Round %d/3", round + 1);
+        display.display();
+      }
+
+      probeResponseReceived = false;
+      esp_now_send(BROADCAST, (uint8_t*)&probe, sizeof(probe));
+
+      unsigned long start = millis();
+      while (millis() - start < 150) {
+        if (probeResponseReceived) {
+          foundChannel = ch;
+          Serial.printf("Parent found on channel %d\n", ch);
+          return true;
+        }
+        delay(1);
+      }
+    }
+  }
+  return false;
+}
+
 void updateDisplay() {
   display.clearDisplay();
 
   // Header: node + WiFi channel + send stats (size 1)
   display.setTextSize(1);
   display.setCursor(0, 0);
-  display.printf("Node %d  Ch:%d", NODE_ID, WiFi.channel());
+  display.printf("Node %d  Ch:%d", NODE_ID, foundChannel);
   display.setCursor(0, 8);
   display.printf("TX ok:%d fail:%d", sendOkCount, sendFailCount);
 
@@ -317,44 +368,10 @@ void setup() {
     Serial.println("OLED: not found (continuing without display)");
   }
 
-  // Connect to WiFi so child uses same channel as parent (required for ESP-NOW)
+  // Init WiFi in station mode for ESP-NOW (no WiFi connection needed)
   WiFi.mode(WIFI_STA);
   Serial.print("MAC Address: ");
   Serial.println(WiFi.macAddress());
-  Serial.printf("Connecting to WiFi '%s' for channel alignment...\n", WIFI_SSID);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-  }
-  if (WiFi.status() == WL_CONNECTED) {
-    esp_wifi_set_ps(WIFI_PS_NONE);  // Disable power saving - improves ESP-NOW reliability
-    Serial.printf("\nWiFi connected. IP: %s, Channel: %d\n", WiFi.localIP().toString().c_str(), WiFi.channel());
-    if (hasDisplay) {
-      display.clearDisplay();
-      display.setCursor(0, 0);
-      display.printf("Child Node %d", NODE_ID);
-      display.setCursor(0, 12);
-      display.printf("WiFi Ch: %d", WiFi.channel());
-      display.setCursor(0, 24);
-      display.println("Waiting for cars...");
-      display.display();
-    }
-  } else {
-    Serial.println("\nWiFi failed - ESP-NOW may not reach parent on different channel");
-    if (hasDisplay) {
-      display.clearDisplay();
-      display.setCursor(0, 0);
-      display.printf("Child Node %d", NODE_ID);
-      display.setCursor(0, 12);
-      display.println("WiFi FAILED!");
-      display.setCursor(0, 24);
-      display.println("ESP-NOW may fail");
-      display.display();
-    }
-  }
 
   // Init ESP-NOW
   if (esp_now_init() != ESP_OK) {
@@ -363,15 +380,45 @@ void setup() {
   }
 
   esp_now_register_send_cb(onDataSent);
+  esp_now_register_recv_cb(onDataReceived);
 
-  // Register parent peer
+  // Register broadcast peer
   memcpy(peerInfo.peer_addr, BROADCAST, 6);
   peerInfo.channel = 0;
   peerInfo.encrypt = false;
 
   if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-    Serial.println("Failed to add parent peer");
+    Serial.println("Failed to add broadcast peer");
     return;
+  }
+
+  // Find parent by probing all channels
+  Serial.println("Scanning for parent...");
+  if (findParentChannel()) {
+    Serial.printf("Locked to channel %d\n", foundChannel);
+    if (hasDisplay) {
+      display.clearDisplay();
+      display.setCursor(0, 0);
+      display.printf("Child Node %d", NODE_ID);
+      display.setCursor(0, 12);
+      display.printf("Parent Ch: %d", foundChannel);
+      display.setCursor(0, 24);
+      display.println("Waiting for cars...");
+      display.display();
+    }
+  } else {
+    Serial.println("Parent not found! Staying on channel 1");
+    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+    if (hasDisplay) {
+      display.clearDisplay();
+      display.setCursor(0, 0);
+      display.printf("Child Node %d", NODE_ID);
+      display.setCursor(0, 12);
+      display.println("Parent NOT FOUND");
+      display.setCursor(0, 24);
+      display.println("Using Ch 1");
+      display.display();
+    }
   }
 
   // Setup sensors
@@ -393,7 +440,7 @@ void setup() {
       sensors[i].intervalHistory[j] = 0;
     }
 
-    pinMode(SENSOR_PINS[i], INPUT);
+    pinMode(SENSOR_PINS[i], INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(SENSOR_PINS[i]), isrFunctions[i], FALLING);
     Serial.printf("  %d:%d - GPIO %d\n", NODE_ID, i, SENSOR_PINS[i]);
   }

@@ -22,9 +22,9 @@
 const uint8_t PARENT_NODE_ID = 255;  // Parent uses 255 to distinguish from children
 const int WEBSOCKET_PORT = 81;
 
-// Sensor GPIO pins - only configure pins with phototransistors connected
-const int SENSOR_PINS[] = {4, 5};
-const int NUM_SENSORS = 2;
+// Sensor GPIO pins (INPUT_PULLUP prevents false triggers on unconnected pins)
+const int SENSOR_PINS[] = {4, 5, 16, 17};
+const int NUM_SENSORS = 4;
 
 // ========== CAR DETECTION ==========
 const int CAR_FREQUENCIES[] = {5500, 4400, 3700, 3100, 2800, 2400};
@@ -52,6 +52,12 @@ struct CarEvent {
   uint8_t carNumber;
   uint16_t frequency;
   uint32_t timestamp;
+};
+
+// Channel discovery probe (must match child)
+struct ProbeMsg {
+  uint8_t magic;    // 0xAA = request, 0xBB = response
+  uint8_t nodeId;
 };
 
 // Sensor state structure
@@ -269,11 +275,27 @@ void processSensor(SensorState& sensor) {
 }
 
 void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
+  // Handle channel discovery probe
+  if (len == sizeof(ProbeMsg) && data[0] == 0xAA) {
+    Serial.printf("# Probe from Node %d, responding\n", data[1]);
+    // Add child as peer so we can respond
+    if (!esp_now_is_peer_exist(mac)) {
+      esp_now_peer_info_t peer;
+      memcpy(peer.peer_addr, mac, 6);
+      peer.channel = 0;
+      peer.encrypt = false;
+      esp_now_add_peer(&peer);
+    }
+    ProbeMsg response;
+    response.magic = 0xBB;
+    response.nodeId = PARENT_NODE_ID;
+    esp_now_send(mac, (uint8_t*)&response, sizeof(response));
+    return;
+  }
+
   espNowRecvCount++;
-  Serial.printf("# ESP-NOW recv: %d bytes from %02X:%02X:%02X:%02X:%02X:%02X\n",
-                len, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
   if (len != sizeof(CarEvent)) {
-    Serial.printf("Invalid packet size: %d (expected %d)\n", len, sizeof(CarEvent));
+    Serial.printf("# ESP-NOW recv: unexpected %d bytes (expected %d)\n", len, sizeof(CarEvent));
     return;
   }
 
@@ -462,7 +484,7 @@ void setup() {
       sensors[i].intervalHistory[j] = 0;
     }
 
-    pinMode(SENSOR_PINS[i], INPUT);
+    pinMode(SENSOR_PINS[i], INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(SENSOR_PINS[i]), isrFunctions[i], FALLING);
     Serial.printf("#   P:%d - GPIO %d\n", i, SENSOR_PINS[i]);
   }
