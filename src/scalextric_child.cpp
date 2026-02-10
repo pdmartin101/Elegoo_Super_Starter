@@ -294,9 +294,9 @@ bool findParentChannel() {
         display.setTextSize(1);
         display.setCursor(0, 0);
         display.printf("Child Node %d", NODE_ID);
-        display.setCursor(0, 12);
+        display.setCursor(0, 16);
         display.printf("Scanning Ch: %d", ch);
-        display.setCursor(0, 24);
+        display.setCursor(0, 28);
         display.printf("Round %d/3", round + 1);
         display.display();
       }
@@ -321,16 +321,14 @@ bool findParentChannel() {
 void updateDisplay() {
   display.clearDisplay();
 
-  // Header: node + WiFi channel + send stats (size 1)
+  // Header: node + channel + TX stats (single line, matches parent layout)
   display.setTextSize(1);
   display.setCursor(0, 0);
-  display.printf("Node %d  Ch:%d", NODE_ID, foundChannel);
-  display.setCursor(0, 8);
-  display.printf("TX ok:%d fail:%d", sendOkCount, sendFailCount);
+  display.printf("N%d Ch:%d ok:%d f:%d", NODE_ID, foundChannel, sendOkCount, sendFailCount);
 
   // Big car number (size 3 = 18x24px)
   display.setTextSize(3);
-  display.setCursor(0, 18);
+  display.setCursor(0, 12);
   display.printf("Car %d", lastDetectedCar);
 
   // Frequency and sensor (size 1)
@@ -360,7 +358,7 @@ void setup() {
     display.setTextSize(1);
     display.setCursor(0, 0);
     display.printf("Child Node %d", NODE_ID);
-    display.setCursor(0, 12);
+    display.setCursor(0, 16);
     display.println("Waiting for cars...");
     display.display();
     Serial.println("OLED: OK");
@@ -400,9 +398,9 @@ void setup() {
       display.clearDisplay();
       display.setCursor(0, 0);
       display.printf("Child Node %d", NODE_ID);
-      display.setCursor(0, 12);
+      display.setCursor(0, 16);
       display.printf("Parent Ch: %d", foundChannel);
-      display.setCursor(0, 24);
+      display.setCursor(0, 28);
       display.println("Waiting for cars...");
       display.display();
     }
@@ -413,9 +411,9 @@ void setup() {
       display.clearDisplay();
       display.setCursor(0, 0);
       display.printf("Child Node %d", NODE_ID);
-      display.setCursor(0, 12);
+      display.setCursor(0, 16);
       display.println("Parent NOT FOUND");
-      display.setCursor(0, 24);
+      display.setCursor(0, 28);
       display.println("Using Ch 1");
       display.display();
     }
