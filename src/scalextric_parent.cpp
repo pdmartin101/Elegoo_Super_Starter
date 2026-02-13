@@ -21,6 +21,7 @@
 //       0:2:3:3704:14.23.05.123 = Child 0, Sensor 2, Car 3, 3704 Hz, 14:23:05.123
 
 // ========== CONFIGURATION ==========
+#define WIFI_ENABLED 1  // Set to 0 to disable WiFi for testing
 const uint8_t PARENT_NODE_ID = 255;  // Parent uses 255 to distinguish from children
 const int WEBSOCKET_PORT = 81;
 
@@ -60,6 +61,7 @@ struct CarEvent {
 struct ProbeMsg {
   uint8_t magic;    // 0xAA = request, 0xBB = response
   uint8_t nodeId;
+  uint8_t channel;  // Parent includes WiFi channel in response
 };
 
 // Sensor state structure
@@ -97,10 +99,10 @@ const int LOG_SIZE = 3;
 CarEvent eventLog[LOG_SIZE];
 int logCount = 0;
 
-// ISRs for each sensor (must be separate functions)
-void IRAM_ATTR onPulse0() {
+// ISR shared logic + thin wrappers (attachInterrupt needs separate function pointers)
+void IRAM_ATTR onPulse(int i) {
   unsigned long now = micros();
-  SensorState& s = sensors[0];
+  SensorState& s = sensors[i];
   if (s.lastPulseTime > 0) {
     s.pulseInterval = now - s.lastPulseTime;
     if (s.pulseInterval >= MIN_VALID_INTERVAL && s.pulseInterval <= MAX_VALID_INTERVAL) {
@@ -113,50 +115,10 @@ void IRAM_ATTR onPulse0() {
   s.lastPulseTime = now;
 }
 
-void IRAM_ATTR onPulse1() {
-  unsigned long now = micros();
-  SensorState& s = sensors[1];
-  if (s.lastPulseTime > 0) {
-    s.pulseInterval = now - s.lastPulseTime;
-    if (s.pulseInterval >= MIN_VALID_INTERVAL && s.pulseInterval <= MAX_VALID_INTERVAL) {
-      s.intervalHistory[s.historyIndex] = s.pulseInterval;
-      s.historyIndex = (s.historyIndex + 1) % HISTORY_SIZE;
-      s.pulseCount++;
-      s.newPulseData = true;
-    }
-  }
-  s.lastPulseTime = now;
-}
-
-void IRAM_ATTR onPulse2() {
-  unsigned long now = micros();
-  SensorState& s = sensors[2];
-  if (s.lastPulseTime > 0) {
-    s.pulseInterval = now - s.lastPulseTime;
-    if (s.pulseInterval >= MIN_VALID_INTERVAL && s.pulseInterval <= MAX_VALID_INTERVAL) {
-      s.intervalHistory[s.historyIndex] = s.pulseInterval;
-      s.historyIndex = (s.historyIndex + 1) % HISTORY_SIZE;
-      s.pulseCount++;
-      s.newPulseData = true;
-    }
-  }
-  s.lastPulseTime = now;
-}
-
-void IRAM_ATTR onPulse3() {
-  unsigned long now = micros();
-  SensorState& s = sensors[3];
-  if (s.lastPulseTime > 0) {
-    s.pulseInterval = now - s.lastPulseTime;
-    if (s.pulseInterval >= MIN_VALID_INTERVAL && s.pulseInterval <= MAX_VALID_INTERVAL) {
-      s.intervalHistory[s.historyIndex] = s.pulseInterval;
-      s.historyIndex = (s.historyIndex + 1) % HISTORY_SIZE;
-      s.pulseCount++;
-      s.newPulseData = true;
-    }
-  }
-  s.lastPulseTime = now;
-}
+void IRAM_ATTR onPulse0() { onPulse(0); }
+void IRAM_ATTR onPulse1() { onPulse(1); }
+void IRAM_ATTR onPulse2() { onPulse(2); }
+void IRAM_ATTR onPulse3() { onPulse(3); }
 
 void (*isrFunctions[])() = {onPulse0, onPulse1, onPulse2, onPulse3};
 
@@ -292,7 +254,7 @@ void processSensor(SensorState& sensor) {
         sensor.confirmCount = 1;
       }
 
-      if (sensor.confirmCount >= CONFIRM_COUNT && car != sensor.lastCarDetected) {
+      if (sensor.confirmCount >= CONFIRM_COUNT && sensor.lastCarDetected == 0) {
         onLocalCarDetected(sensor.id, car, freq);
         sensor.lastCarDetected = car;
       }
@@ -319,6 +281,7 @@ void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
     ProbeMsg response;
     response.magic = 0xBB;
     response.nodeId = PARENT_NODE_ID;
+    response.channel = WiFi.channel();
     esp_now_send(mac, (uint8_t*)&response, sizeof(response));
     return;
   }
@@ -428,15 +391,17 @@ void setup() {
     display.setTextSize(1);
     display.setCursor(0, 0);
     display.println("Scalextric Parent");
-    display.println("Connecting WiFi...");
+    display.println(WIFI_ENABLED ? "Connecting WiFi..." : "WiFi disabled");
     display.display();
     Serial.println("# OLED: OK");
   } else {
     Serial.println("# OLED: not found (continuing without display)");
   }
 
-  // Connect to WiFi (needed for WebSocket server)
   WiFi.mode(WIFI_STA);
+
+#if WIFI_ENABLED
+  // Connect to WiFi (needed for WebSocket server)
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   Serial.printf("# Connecting to %s", WIFI_SSID);
 
@@ -496,6 +461,9 @@ void setup() {
       display.display();
     }
   }
+#else
+  Serial.println("# WiFi: disabled for testing");
+#endif
 
   Serial.print("# Parent MAC: ");
   Serial.println(WiFi.macAddress());
@@ -540,7 +508,9 @@ void setup() {
 }
 
 void loop() {
+#if WIFI_ENABLED
   webSocket.loop();
+#endif
   for (int i = 0; i < NUM_SENSORS; i++) {
     processSensor(sensors[i]);
   }

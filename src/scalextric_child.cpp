@@ -72,6 +72,7 @@ struct CarEvent {
 struct ProbeMsg {
   uint8_t magic;    // 0xAA = request, 0xBB = response
   uint8_t nodeId;
+  uint8_t channel;  // Parent includes WiFi channel in response
 };
 volatile bool probeResponseReceived = false;
 uint8_t foundChannel = 0;
@@ -98,10 +99,10 @@ SensorState sensors[NUM_SENSORS];
 
 esp_now_peer_info_t peerInfo;
 
-// ISRs for each sensor (must be separate functions)
-void IRAM_ATTR onPulse0() {
+// ISR shared logic + thin wrappers (attachInterrupt needs separate function pointers)
+void IRAM_ATTR onPulse(int i) {
   unsigned long now = micros();
-  SensorState& s = sensors[0];
+  SensorState& s = sensors[i];
   if (s.lastPulseTime > 0) {
     s.pulseInterval = now - s.lastPulseTime;
     if (s.pulseInterval >= MIN_VALID_INTERVAL && s.pulseInterval <= MAX_VALID_INTERVAL) {
@@ -114,50 +115,10 @@ void IRAM_ATTR onPulse0() {
   s.lastPulseTime = now;
 }
 
-void IRAM_ATTR onPulse1() {
-  unsigned long now = micros();
-  SensorState& s = sensors[1];
-  if (s.lastPulseTime > 0) {
-    s.pulseInterval = now - s.lastPulseTime;
-    if (s.pulseInterval >= MIN_VALID_INTERVAL && s.pulseInterval <= MAX_VALID_INTERVAL) {
-      s.intervalHistory[s.historyIndex] = s.pulseInterval;
-      s.historyIndex = (s.historyIndex + 1) % HISTORY_SIZE;
-      s.pulseCount++;
-      s.newPulseData = true;
-    }
-  }
-  s.lastPulseTime = now;
-}
-
-void IRAM_ATTR onPulse2() {
-  unsigned long now = micros();
-  SensorState& s = sensors[2];
-  if (s.lastPulseTime > 0) {
-    s.pulseInterval = now - s.lastPulseTime;
-    if (s.pulseInterval >= MIN_VALID_INTERVAL && s.pulseInterval <= MAX_VALID_INTERVAL) {
-      s.intervalHistory[s.historyIndex] = s.pulseInterval;
-      s.historyIndex = (s.historyIndex + 1) % HISTORY_SIZE;
-      s.pulseCount++;
-      s.newPulseData = true;
-    }
-  }
-  s.lastPulseTime = now;
-}
-
-void IRAM_ATTR onPulse3() {
-  unsigned long now = micros();
-  SensorState& s = sensors[3];
-  if (s.lastPulseTime > 0) {
-    s.pulseInterval = now - s.lastPulseTime;
-    if (s.pulseInterval >= MIN_VALID_INTERVAL && s.pulseInterval <= MAX_VALID_INTERVAL) {
-      s.intervalHistory[s.historyIndex] = s.pulseInterval;
-      s.historyIndex = (s.historyIndex + 1) % HISTORY_SIZE;
-      s.pulseCount++;
-      s.newPulseData = true;
-    }
-  }
-  s.lastPulseTime = now;
-}
+void IRAM_ATTR onPulse0() { onPulse(0); }
+void IRAM_ATTR onPulse1() { onPulse(1); }
+void IRAM_ATTR onPulse2() { onPulse(2); }
+void IRAM_ATTR onPulse3() { onPulse(3); }
 
 void (*isrFunctions[])() = {onPulse0, onPulse1, onPulse2, onPulse3};
 
@@ -258,7 +219,7 @@ void processSensor(SensorState& sensor) {
         sensor.confirmCount = 1;
       }
 
-      if (sensor.confirmCount >= CONFIRM_COUNT && car != sensor.lastCarDetected) {
+      if (sensor.confirmCount >= CONFIRM_COUNT && sensor.lastCarDetected == 0) {
         sendCarEvent(sensor.id, car, freq);
         sensor.lastCarDetected = car;
       }
@@ -276,6 +237,9 @@ void onDataSent(const uint8_t* mac, esp_now_send_status_t status) {
 
 void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
   if (len == sizeof(ProbeMsg) && data[0] == 0xBB) {
+    ProbeMsg response;
+    memcpy(&response, data, sizeof(response));
+    foundChannel = response.channel;
     probeResponseReceived = true;
   }
 }
@@ -284,6 +248,7 @@ bool findParentChannel() {
   ProbeMsg probe;
   probe.magic = 0xAA;
   probe.nodeId = NODE_ID;
+  probe.channel = 0;
 
   for (int round = 0; round < 3; round++) {
     for (uint8_t ch = 1; ch <= 13; ch++) {
@@ -307,8 +272,9 @@ bool findParentChannel() {
       unsigned long start = millis();
       while (millis() - start < 150) {
         if (probeResponseReceived) {
-          foundChannel = ch;
-          Serial.printf("Parent found on channel %d\n", ch);
+          // foundChannel was set from the parent's response in onDataReceived
+          esp_wifi_set_channel(foundChannel, WIFI_SECOND_CHAN_NONE);
+          Serial.printf("Parent found on channel %d\n", foundChannel);
           return true;
         }
         delay(1);
