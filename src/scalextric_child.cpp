@@ -27,10 +27,10 @@ const int NUM_SENSORS = 4;
 
 // ========== CAR DETECTION ==========
 const int CAR_FREQUENCIES[] = {5500, 4400, 3700, 3100, 2800, 2400};
-const int FREQUENCY_TOLERANCE = 300;
+const float FREQUENCY_TOLERANCE_PCT = 0.08;  // 8% of target frequency
 const unsigned long MIN_VALID_INTERVAL = 150;
 const unsigned long MAX_VALID_INTERVAL = 450;
-const int MIN_PULSES_FOR_ID = 10;
+const int MIN_PULSES_FOR_ID = 6;
 const unsigned long DETECTION_TIMEOUT = 50000;
 const int CONFIRM_COUNT = 3;
 const int HISTORY_SIZE = 10;
@@ -103,10 +103,14 @@ esp_now_peer_info_t peerInfo;
 void IRAM_ATTR onPulse(int i) {
   unsigned long now = micros();
   SensorState& s = sensors[i];
+  unsigned long delta = now - s.lastPulseTime;
+
+  if (delta < 40) return;  // ignore bounce/glitch
+
   if (s.lastPulseTime > 0) {
-    s.pulseInterval = now - s.lastPulseTime;
-    if (s.pulseInterval >= MIN_VALID_INTERVAL && s.pulseInterval <= MAX_VALID_INTERVAL) {
-      s.intervalHistory[s.historyIndex] = s.pulseInterval;
+    s.pulseInterval = delta;
+    if (delta >= MIN_VALID_INTERVAL && delta <= MAX_VALID_INTERVAL) {
+      s.intervalHistory[s.historyIndex] = delta;
       s.historyIndex = (s.historyIndex + 1) % HISTORY_SIZE;
       s.pulseCount++;
       s.newPulseData = true;
@@ -124,10 +128,11 @@ void (*isrFunctions[])() = {onPulse0, onPulse1, onPulse2, onPulse3};
 
 int identifyCar(float frequency) {
   int bestCar = 0;
-  float bestDiff = FREQUENCY_TOLERANCE;
+  float bestDiff = frequency;
   for (int car = 0; car < 6; car++) {
     float diff = abs(frequency - CAR_FREQUENCIES[car]);
-    if (diff < bestDiff) {
+    float maxDiff = CAR_FREQUENCIES[car] * FREQUENCY_TOLERANCE_PCT;
+    if (diff < maxDiff && diff < bestDiff) {
       bestDiff = diff;
       bestCar = car + 1;
     }
