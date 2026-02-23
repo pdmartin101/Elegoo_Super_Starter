@@ -10,6 +10,8 @@
 #include <time.h>
 #include <sys/time.h>
 #include "wifi_credentials.h"
+#include "scalextric_protocol.h"
+#include "car_detection.h"
 
 // Scalextric Car Detector - ESP-NOW Parent Node
 // Detects cars locally AND receives events from child nodes via ESP-NOW
@@ -22,22 +24,7 @@
 
 // ========== CONFIGURATION ==========
 #define WIFI_ENABLED 1  // Set to 0 to disable WiFi for testing
-const uint8_t PARENT_NODE_ID = 255;  // Parent uses 255 to distinguish from children
 const int WEBSOCKET_PORT = 81;
-
-// Sensor GPIO pins (INPUT_PULLUP prevents false triggers on unconnected pins)
-const int SENSOR_PINS[] = {4, 5, 16, 17};
-const int NUM_SENSORS = 4;
-
-// ========== CAR DETECTION ==========
-const int CAR_FREQUENCIES[] = {5500, 4400, 3700, 3100, 2800, 2400};
-const float FREQUENCY_TOLERANCE_PCT = 0.08;  // 8% of target frequency
-const unsigned long MIN_VALID_INTERVAL = 150;
-const unsigned long MAX_VALID_INTERVAL = 450;
-const int MIN_PULSES_FOR_ID = 6;
-const unsigned long DETECTION_TIMEOUT = 50000;
-const int CONFIRM_COUNT = 3;
-const int HISTORY_SIZE = 10;
 
 // OLED display
 #define SCREEN_WIDTH 128
@@ -47,42 +34,6 @@ bool hasDisplay = false;
 
 // WebSocket server
 WebSocketsServer webSocket = WebSocketsServer(WEBSOCKET_PORT);
-
-// ESP-NOW message structure (must match child)
-struct CarEvent {
-  uint8_t nodeId;
-  uint8_t sensorId;
-  uint8_t carNumber;
-  uint16_t frequency;
-  uint32_t timestamp;
-};
-
-// Channel discovery probe (must match child)
-struct ProbeMsg {
-  uint8_t magic;    // 0xAA = request, 0xBB = response
-  uint8_t nodeId;
-  uint8_t channel;  // Parent includes WiFi channel in response
-};
-
-// Sensor state structure
-struct SensorState {
-  uint8_t id;
-  int pin;
-  volatile unsigned long lastPulseTime;
-  volatile unsigned long pulseInterval;
-  volatile int pulseCount;
-  volatile bool newPulseData;
-  volatile unsigned long intervalHistory[HISTORY_SIZE];
-  volatile int historyIndex;
-  unsigned long lastActivityTime;
-  bool detecting;
-  int lastCarDetected;
-  int candidateCar;
-  int confirmCount;
-};
-
-// Four sensor instances
-SensorState sensors[NUM_SENSORS];
 
 // Track registered children
 const int MAX_CHILDREN = 10;
@@ -99,80 +50,13 @@ const int LOG_SIZE = 3;
 CarEvent eventLog[LOG_SIZE];
 int logCount = 0;
 
-// ISR shared logic + thin wrappers (attachInterrupt needs separate function pointers)
-void IRAM_ATTR onPulse(int i) {
-  unsigned long now = micros();
-  SensorState& s = sensors[i];
-  unsigned long delta = now - s.lastPulseTime;
+// Per-car detection counts (index 0 = car 1, etc.)
+const int NUM_CARS = 6;
+int carCounts[NUM_CARS] = {0};
 
-  if (delta < 40) return;  // ignore bounce/glitch
-
-  if (s.lastPulseTime > 0) {
-    s.pulseInterval = delta;
-    if (delta >= MIN_VALID_INTERVAL && delta <= MAX_VALID_INTERVAL) {
-      s.intervalHistory[s.historyIndex] = delta;
-      s.historyIndex = (s.historyIndex + 1) % HISTORY_SIZE;
-      s.pulseCount++;
-      s.newPulseData = true;
-    }
-  }
-  s.lastPulseTime = now;
-}
-
-void IRAM_ATTR onPulse0() { onPulse(0); }
-void IRAM_ATTR onPulse1() { onPulse(1); }
-void IRAM_ATTR onPulse2() { onPulse(2); }
-void IRAM_ATTR onPulse3() { onPulse(3); }
-
-void (*isrFunctions[])() = {onPulse0, onPulse1, onPulse2, onPulse3};
-
-int identifyCar(float frequency) {
-  int bestCar = 0;
-  float bestDiff = frequency;
-  for (int car = 0; car < 6; car++) {
-    float diff = abs(frequency - CAR_FREQUENCIES[car]);
-    float maxDiff = CAR_FREQUENCIES[car] * FREQUENCY_TOLERANCE_PCT;
-    if (diff < maxDiff && diff < bestDiff) {
-      bestDiff = diff;
-      bestCar = car + 1;
-    }
-  }
-  return bestCar;
-}
-
-float calculateMedianFrequency(volatile unsigned long* history) {
-  unsigned long temp[HISTORY_SIZE];
-  int validSamples = 0;
-  for (int i = 0; i < HISTORY_SIZE; i++) {
-    if (history[i] > 0) {
-      temp[validSamples++] = history[i];
-    }
-  }
-  if (validSamples < 3) return 0;
-  for (int i = 0; i < validSamples - 1; i++) {
-    for (int j = 0; j < validSamples - i - 1; j++) {
-      if (temp[j] > temp[j + 1]) {
-        unsigned long swap = temp[j];
-        temp[j] = temp[j + 1];
-        temp[j + 1] = swap;
-      }
-    }
-  }
-  return 1000000.0 / temp[validSamples / 2];
-}
-
-void resetSensor(SensorState& sensor) {
-  sensor.pulseCount = 0;
-  sensor.historyIndex = 0;
-  sensor.lastPulseTime = 0;
-  for (int i = 0; i < HISTORY_SIZE; i++) {
-    sensor.intervalHistory[i] = 0;
-  }
-  sensor.detecting = false;
-  sensor.lastCarDetected = 0;
-  sensor.candidateCar = 0;
-  sensor.confirmCount = 0;
-}
+// WiFi monitoring
+unsigned long lastWifiCheck = 0;
+bool wifiWasConnected = false;
 
 // Format current NTP time as HH.MM.SS.mmm, returns false if NTP not synced
 bool formatNtpTime(char* buf, size_t len) {
@@ -211,6 +95,11 @@ void logEvent(CarEvent& event) {
   }
   eventLog[0] = event;
   if (logCount < LOG_SIZE) logCount++;
+
+  if (event.carNumber >= 1 && event.carNumber <= NUM_CARS) {
+    carCounts[event.carNumber - 1]++;
+  }
+
   displayNeedsUpdate = true;
 
   broadcastEvent(event);
@@ -238,53 +127,20 @@ void onLocalCarDetected(uint8_t sensorId, int car, float freq) {
   logEvent(event);
 }
 
-void processSensor(SensorState& sensor) {
-  if (sensor.newPulseData) {
-    sensor.newPulseData = false;
-    sensor.lastActivityTime = micros();
-    if (!sensor.detecting) {
-      sensor.detecting = true;
-    }
-  }
-
-  if (sensor.detecting && sensor.pulseCount >= MIN_PULSES_FOR_ID) {
-    float freq = calculateMedianFrequency(sensor.intervalHistory);
-    int car = identifyCar(freq);
-
-    if (car > 0) {
-      if (car == sensor.candidateCar) {
-        sensor.confirmCount++;
-      } else {
-        sensor.candidateCar = car;
-        sensor.confirmCount = 1;
-      }
-
-      if (sensor.confirmCount >= CONFIRM_COUNT && sensor.lastCarDetected == 0) {
-        onLocalCarDetected(sensor.id, car, freq);
-        sensor.lastCarDetected = car;
-      }
-    }
-  }
-
-  if (sensor.detecting && (micros() - sensor.lastActivityTime > DETECTION_TIMEOUT)) {
-    resetSensor(sensor);
-  }
-}
-
 void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
   // Handle channel discovery probe
-  if (len == sizeof(ProbeMsg) && data[0] == 0xAA) {
+  if (len == sizeof(ProbeMsg) && data[0] == PROBE_REQUEST_MAGIC) {
     Serial.printf("# Probe from Node %d, responding\n", data[1]);
     // Add child as peer so we can respond
     if (!esp_now_is_peer_exist(mac)) {
-      esp_now_peer_info_t peer;
+      esp_now_peer_info_t peer = {};
       memcpy(peer.peer_addr, mac, 6);
       peer.channel = 0;
       peer.encrypt = false;
       esp_now_add_peer(&peer);
     }
     ProbeMsg response;
-    response.magic = 0xBB;
+    response.magic = PROBE_RESPONSE_MAGIC;
     response.nodeId = PARENT_NODE_ID;
     response.channel = WiFi.channel();
     esp_now_send(mac, (uint8_t*)&response, sizeof(response));
@@ -370,15 +226,11 @@ void updateDisplay() {
   display.setCursor(0, 40);
   display.printf("%d Hz  Sensor %d", lastEvent.frequency, lastEvent.sensorId);
 
-  // Recent events log
-  display.setCursor(0, 52);
-  for (int i = 0; i < logCount && i < LOG_SIZE; i++) {
-    if (eventLog[i].nodeId == PARENT_NODE_ID) {
-      display.printf("P:%d=C%d ", eventLog[i].sensorId, eventLog[i].carNumber);
-    } else {
-      display.printf("%d:%d=C%d ", eventLog[i].nodeId, eventLog[i].sensorId, eventLog[i].carNumber);
-    }
-  }
+  // Per-car detection counts
+  display.setCursor(0, 48);
+  display.printf("1:%d 2:%d 3:%d", carCounts[0], carCounts[1], carCounts[2]);
+  display.setCursor(0, 56);
+  display.printf("4:%d 5:%d 6:%d", carCounts[3], carCounts[4], carCounts[5]);
 
   display.display();
 }
@@ -403,10 +255,10 @@ void setup() {
     Serial.println("# OLED: not found (continuing without display)");
   }
 
+  // Connect to WiFi (needed for WebSocket server)
   WiFi.mode(WIFI_STA);
 
 #if WIFI_ENABLED
-  // Connect to WiFi (needed for WebSocket server)
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   Serial.printf("# Connecting to %s", WIFI_SSID);
 
@@ -470,39 +322,23 @@ void setup() {
   Serial.println("# WiFi: disabled for testing");
 #endif
 
+  wifiWasConnected = (WiFi.status() == WL_CONNECTED);
+
   Serial.print("# Parent MAC: ");
   Serial.println(WiFi.macAddress());
   Serial.println("#");
 
   // Init ESP-NOW (works alongside WiFi STA)
-  if (esp_now_init() != ESP_OK) {
-    Serial.println("# ESP-NOW init failed!");
-    return;
+  if (esp_now_init() == ESP_OK) {
+    esp_now_register_recv_cb(onDataReceived);
+  } else {
+    Serial.println("# ESP-NOW init failed! Local sensors only.");
   }
-
-  esp_now_register_recv_cb(onDataReceived);
 
   // Setup local sensors
   Serial.println("# Local sensors:");
+  initSensors();
   for (int i = 0; i < NUM_SENSORS; i++) {
-    sensors[i].id = i;
-    sensors[i].pin = SENSOR_PINS[i];
-    sensors[i].lastPulseTime = 0;
-    sensors[i].pulseInterval = 0;
-    sensors[i].pulseCount = 0;
-    sensors[i].newPulseData = false;
-    sensors[i].historyIndex = 0;
-    sensors[i].lastActivityTime = 0;
-    sensors[i].detecting = false;
-    sensors[i].lastCarDetected = 0;
-    sensors[i].candidateCar = 0;
-    sensors[i].confirmCount = 0;
-    for (int j = 0; j < HISTORY_SIZE; j++) {
-      sensors[i].intervalHistory[j] = 0;
-    }
-
-    pinMode(SENSOR_PINS[i], INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(SENSOR_PINS[i]), isrFunctions[i], FALLING);
     Serial.printf("#   P:%d - GPIO %d\n", i, SENSOR_PINS[i]);
   }
 
@@ -515,9 +351,23 @@ void setup() {
 void loop() {
 #if WIFI_ENABLED
   webSocket.loop();
+
+  // Periodic WiFi status check
+  if (millis() - lastWifiCheck > 10000) {
+    lastWifiCheck = millis();
+    bool connected = WiFi.status() == WL_CONNECTED;
+    if (wifiWasConnected && !connected) {
+      Serial.println("# WiFi lost, waiting for reconnect...");
+    } else if (!wifiWasConnected && connected) {
+      Serial.printf("# WiFi restored: %s\n", WiFi.localIP().toString().c_str());
+      configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+    }
+    wifiWasConnected = connected;
+  }
 #endif
+
   for (int i = 0; i < NUM_SENSORS; i++) {
-    processSensor(sensors[i]);
+    processSensor(sensors[i], onLocalCarDetected);
   }
   if (hasDisplay && displayNeedsUpdate) {
     displayNeedsUpdate = false;
