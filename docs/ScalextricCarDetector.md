@@ -44,18 +44,15 @@ Detects and identifies Scalextric Digital cars (1-6) by their unique IR pulse fr
           |
           +----------- GPIO (sensor pin)
           |
-    +-----+-----+
-    |           |
-  [22nF]    Collector (short leg)
-    |        TEFT4300
-   GND      Emitter (long leg)
-                |
-               GND
+       Collector (short leg)
+        TEFT4300
+       Emitter (long leg)
+          |
+         GND
 ```
 
 **Component values:**
 - Pull-up resistor: 4.7kΩ (provides bias current and creates voltage divider)
-- Filter capacitor: 22nF - filters high-frequency noise on collector side
 - Phototransistor: TEFT4300 (or similar NPN phototransistor)
 
 **How it works:**
@@ -63,6 +60,8 @@ Detects and identifies Scalextric Digital cars (1-6) by their unique IR pulse fr
 2. When IR light detected: phototransistor conducts, pulls GPIO LOW
 3. Pulsed IR from car creates falling edges that trigger interrupts
 4. Frequency of pulses identifies which car (1-6)
+
+**Why no filter capacitor:** A capacitor across the collector (e.g. 22nF) forms an RC low-pass filter with the 4.7kΩ pull-up resistor. The cutoff frequency is f = 1/(2πRC) = 1/(2π × 4700 × 22×10⁻⁹) ≈ 1540 Hz. This heavily attenuates car 1 at 5500 Hz (~11 dB down) and noticeably affects cars 2-3 as well. The ISR already has a software bounce filter (`delta < 40µs`) that rejects glitches, so no hardware filtering is needed.
 
 ### Sensor GPIO Pins
 
@@ -72,8 +71,8 @@ Each node (parent or child) supports up to 4 sensors:
 |--------|------|
 | 0      | 4    |
 | 1      | 5    |
-| 2      | 16   |
-| 3      | 17   |
+| 2      | 18   |
+| 3      | 19   |
 
 Unused sensor pins use `INPUT_PULLUP` to prevent false triggers - no external resistors needed on unconnected pins.
 
@@ -91,7 +90,7 @@ NODE:SENSOR:CAR:FREQ:TIME
 |--------|------------|-------------|
 | NODE   | 0-254      | Child node ID (set per child ESP32) |
 |        | 255        | Parent node (local sensors) |
-| SENSOR | 0-3        | Sensor index on that node (GPIO 4, 5, 16, 17) |
+| SENSOR | 0-3        | Sensor index on that node (GPIO 4, 5, 18, 19) |
 | CAR    | 1-6        | Detected car number |
 | FREQ   | int        | Measured IR pulse frequency in Hz |
 | TIME   | HH.MM.SS.mmm | NTP time (UTC), falls back to millis if NTP unavailable |
@@ -138,7 +137,7 @@ pio run -e scalextric_child -t upload
 
 ### Configuration
 
-- **Parent**: Set WiFi credentials in `src/wifi_credentials.h`
+- **Parent**: Set WiFi credentials in `include/wifi_credentials.h`
 - **Child**: Set `NODE_ID` on line 18 of `src/scalextric_child.cpp` (0, 1, 2, etc.)
 - **Max children**: 10 (set by `MAX_CHILDREN` in parent)
 
