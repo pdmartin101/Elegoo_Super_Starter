@@ -77,6 +77,7 @@ try
 
     var buffer = new byte[1024];
     int eventCount = 0;
+    var carCounts = new Dictionary<string, int>();
 
     while (ws.State == WebSocketState.Open && !appCts.Token.IsCancellationRequested)
     {
@@ -111,6 +112,12 @@ try
                     // Format ESP32 time (HH.MM.SS.mmm) with colons for display
                     var espTime = timestamp.Replace('.', ':');
                     Console.WriteLine($"{DateTime.Now:HH:mm:ss.ff}  {nodeName,-8} S{sensor,-7} Car {car,-4} {freq,5} Hz  @{espTime}");
+
+                    // Track per-car counts
+                    var carKey = $"Car {car}";
+                    carCounts[carKey] = carCounts.GetValueOrDefault(carKey) + 1;
+                    var counts = string.Join("  ", Enumerable.Range(1, 6).Select(c => $"C{c}:{carCounts.GetValueOrDefault($"Car {c}")}"));
+                    Console.WriteLine($"             [{counts}]");
                 }
                 else
                 {
@@ -130,6 +137,13 @@ try
     }
 
     Console.WriteLine($"\nTotal events received: {eventCount}");
+    if (carCounts.Count > 0)
+    {
+        var summary = string.Join("  ", Enumerable.Range(1, 6)
+            .Where(c => carCounts.ContainsKey($"Car {c}"))
+            .Select(c => $"Car {c}: {carCounts[$"Car {c}"]}"));
+        Console.WriteLine($"Car counts: {summary}");
+    }
 
     if (ws.State == WebSocketState.Open)
     {
