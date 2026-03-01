@@ -18,9 +18,10 @@
 // Serves car events via WebSocket on port 81
 // Discoverable via mDNS at scalextric.local
 //
-// Output format: NODE:SENSOR:CAR:FREQ:TIME
-// e.g., 255:2:3:3704:14.23.05.123 = Parent, Sensor 2, Car 3, 3704 Hz, 14:23:05.123
-//       0:2:3:3704:14.23.05.123 = Child 0, Sensor 2, Car 3, 3704 Hz, 14:23:05.123
+// Output format: NODE:SENSOR:CAR:FREQ:MILLIS
+// e.g., 255:2:3:3704:123456 = Parent, Sensor 2, Car 3, 3704 Hz, millis=123456
+//       0:2:3:3704:123456 = Child 0, Sensor 2, Car 3, 3704 Hz, millis=123456
+// Client maps millis to wall clock via SYNC handshake at connect
 
 // ========== CONFIGURATION ==========
 #define WIFI_ENABLED 1  // Set to 0 to disable WiFi for testing
@@ -54,37 +55,22 @@ int logCount = 0;
 const int NUM_CARS = 6;
 int carCounts[NUM_CARS] = {0};
 
+// Display runs on core 0 via FreeRTOS task to avoid blocking sensor processing
+
+// Event queue - decouple detection from WebSocket sends
+const int EVENT_QUEUE_SIZE = 8;
+CarEvent eventQueue[EVENT_QUEUE_SIZE];
+volatile int eventQueueCount = 0;
+
 // WiFi monitoring
 unsigned long lastWifiCheck = 0;
 bool wifiWasConnected = false;
 
-// Format current NTP time as HH.MM.SS.mmm, returns false if NTP not synced
-bool formatNtpTime(char* buf, size_t len) {
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo, 0) || timeinfo.tm_year < (2020 - 1900)) {
-    return false;
-  }
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-  int ms = tv.tv_usec / 1000;
-  snprintf(buf, len, "%02d.%02d.%02d.%03d",
-           timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec, ms);
-  return true;
-}
-
 void broadcastEvent(CarEvent& event) {
-  // Format event as text and send to all WebSocket clients
-  char msg[64];
-  char timeBuf[16];
-  if (formatNtpTime(timeBuf, sizeof(timeBuf))) {
-    snprintf(msg, sizeof(msg), "%d:%d:%d:%d:%s",
-             event.nodeId, event.sensorId, event.carNumber,
-             event.frequency, timeBuf);
-  } else {
-    snprintf(msg, sizeof(msg), "%d:%d:%d:%d:%lu",
-             event.nodeId, event.sensorId, event.carNumber,
-             event.frequency, event.timestamp);
-  }
+  char msg[48];
+  snprintf(msg, sizeof(msg), "%d:%d:%d:%d:%lu",
+           event.nodeId, event.sensorId, event.carNumber,
+           event.frequency, event.timestamp);
   webSocket.broadcastTXT(msg);
 }
 
@@ -101,8 +87,6 @@ void logEvent(CarEvent& event) {
   }
 
   displayNeedsUpdate = true;
-
-  broadcastEvent(event);
 }
 
 void onLocalCarDetected(uint8_t sensorId, int car, float freq) {
@@ -113,18 +97,12 @@ void onLocalCarDetected(uint8_t sensorId, int car, float freq) {
   event.frequency = (uint16_t)freq;
   event.timestamp = millis();
 
-  char timeBuf[16];
-  if (formatNtpTime(timeBuf, sizeof(timeBuf))) {
-    Serial.printf("%d:%d:%d:%d:%s\n",
-                  event.nodeId, event.sensorId, event.carNumber,
-                  event.frequency, timeBuf);
-  } else {
-    Serial.printf("%d:%d:%d:%d:%lu\n",
-                  event.nodeId, event.sensorId, event.carNumber,
-                  event.frequency, event.timestamp);
-  }
-
   logEvent(event);
+
+  if (eventQueueCount < EVENT_QUEUE_SIZE) {
+    eventQueue[eventQueueCount] = event;
+    eventQueueCount++;
+  }
 }
 
 void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
@@ -156,18 +134,12 @@ void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
   CarEvent event;
   memcpy(&event, data, sizeof(event));
 
-  char timeBuf[16];
-  if (formatNtpTime(timeBuf, sizeof(timeBuf))) {
-    Serial.printf("%d:%d:%d:%d:%s\n",
-                  event.nodeId, event.sensorId, event.carNumber,
-                  event.frequency, timeBuf);
-  } else {
-    Serial.printf("%d:%d:%d:%d:%lu\n",
-                  event.nodeId, event.sensorId, event.carNumber,
-                  event.frequency, event.timestamp);
-  }
-
   logEvent(event);
+
+  if (eventQueueCount < EVENT_QUEUE_SIZE) {
+    eventQueue[eventQueueCount] = event;
+    eventQueueCount++;
+  }
 
   // Check if this is a new child
   bool known = false;
@@ -196,7 +168,11 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
       Serial.printf("# WebSocket client %d disconnected\n", num);
       break;
     case WStype_TEXT:
-      // Could handle commands from C# app here in future
+      if (length >= 4 && memcmp(payload, "SYNC", 4) == 0) {
+        char syncReply[32];
+        snprintf(syncReply, sizeof(syncReply), "SYNC:%lu", millis());
+        webSocket.sendTXT(num, syncReply);
+      }
       break;
     default:
       break;
@@ -235,7 +211,18 @@ void updateDisplay() {
   display.display();
 }
 
+void displayTask(void* param) {
+  for (;;) {
+    if (displayNeedsUpdate) {
+      displayNeedsUpdate = false;
+      updateDisplay();
+    }
+    vTaskDelay(pdMS_TO_TICKS(250));
+  }
+}
+
 void setup() {
+  Serial.setTxBufferSize(512);  // Reduce UART blocking on rapid events
   Serial.begin(115200);
   Serial.println("\n# Scalextric Parent Node");
   Serial.println("# ======================");
@@ -342,14 +329,31 @@ void setup() {
     Serial.printf("#   P:%d - GPIO %d\n", i, SENSOR_PINS[i]);
   }
 
+  if (hasDisplay) {
+    xTaskCreatePinnedToCore(displayTask, "display", 4096, NULL, 1, NULL, 0);
+    Serial.println("# OLED: running on core 0");
+  }
+
   Serial.println("#");
-  Serial.println("# Format: NODE:SENSOR:CAR:FREQ:TIME");
+  Serial.println("# Format: NODE:SENSOR:CAR:FREQ:MILLIS");
   Serial.println("# Parent node = 255, Children = 0,1,2...");
   Serial.println("# Listening for cars...\n");
 }
 
 void loop() {
+  // Process sensors FIRST - detection is time-critical, no TCP writes here
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    processSensor(sensors[i], onLocalCarDetected);
+  }
+
 #if WIFI_ENABLED
+  // Flush queued events FIRST - minimise time between detection and TCP send
+  for (int i = 0; i < eventQueueCount; i++) {
+    broadcastEvent(eventQueue[i]);
+  }
+  eventQueueCount = 0;
+
+  // Then process incoming WebSocket data (can block on TCP reads)
   webSocket.loop();
 
   // Periodic WiFi status check
@@ -366,12 +370,5 @@ void loop() {
   }
 #endif
 
-  for (int i = 0; i < NUM_SENSORS; i++) {
-    processSensor(sensors[i], onLocalCarDetected);
-  }
-  if (hasDisplay && displayNeedsUpdate) {
-    displayNeedsUpdate = false;
-    updateDisplay();
-  }
-  delay(1);
+  yield();  // Give RTOS a chance to run WiFi tasks without fixed 1ms delay
 }

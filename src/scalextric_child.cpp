@@ -47,6 +47,8 @@ struct LogEntry {
 LogEntry eventLog[LOG_SIZE];
 int logCount = 0;
 
+// Display runs on core 0 via FreeRTOS task to avoid blocking sensor processing
+
 volatile bool probeResponseReceived = false;
 uint8_t foundChannel = 0;
 
@@ -170,6 +172,16 @@ void updateDisplay() {
   display.display();
 }
 
+void displayTask(void* param) {
+  for (;;) {
+    if (displayNeedsUpdate) {
+      displayNeedsUpdate = false;
+      updateDisplay();
+    }
+    vTaskDelay(pdMS_TO_TICKS(250));
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.printf("\nScalextric Child Node %d\n", NODE_ID);
@@ -253,6 +265,12 @@ void setup() {
     Serial.printf("  %d:%d - GPIO %d\n", NODE_ID, i, SENSOR_PINS[i]);
   }
 
+  // Start display on core 0 (loop runs on core 1)
+  if (hasDisplay) {
+    xTaskCreatePinnedToCore(displayTask, "display", 4096, NULL, 1, NULL, 0);
+    Serial.println("OLED: running on core 0");
+  }
+
   Serial.println("\nFormat: NODE:SENSOR:CAR:FREQ:TIME");
   Serial.println("Waiting for cars...\n");
 }
@@ -269,10 +287,6 @@ void loop() {
 
   for (int i = 0; i < NUM_SENSORS; i++) {
     processSensor(sensors[i], sendCarEvent);
-  }
-  if (hasDisplay && displayNeedsUpdate) {
-    displayNeedsUpdate = false;
-    updateDisplay();
   }
   delay(1);
 }
