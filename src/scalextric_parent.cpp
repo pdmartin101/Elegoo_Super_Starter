@@ -18,9 +18,9 @@
 // Serves car events via WebSocket on port 81
 // Discoverable via mDNS at scalextric.local
 //
-// Output format: NODE:SENSOR:CAR:FREQ:MILLIS
-// e.g., 255:2:3:3704:123456 = Parent, Sensor 2, Car 3, 3704 Hz, millis=123456
-//       0:2:3:3704:123456 = Child 0, Sensor 2, Car 3, 3704 Hz, millis=123456
+// Output format: SEQ:NODE:SENSOR:CAR:FREQ:MILLIS
+// e.g., 42:255:2:3:3704:123456 = Seq 42, Parent, Sensor 2, Car 3, 3704 Hz, millis=123456
+//       42:0:2:3:3704:123456 = Seq 42, Child 0, Sensor 2, Car 3, 3704 Hz, millis=123456
 // Client maps millis to wall clock via SYNC handshake at connect
 
 // ========== CONFIGURATION ==========
@@ -66,10 +66,13 @@ volatile int eventQueueCount = 0;
 unsigned long lastWifiCheck = 0;
 bool wifiWasConnected = false;
 
+// Sequence number for drop detection
+uint32_t seqNumber = 0;
+
 void broadcastEvent(CarEvent& event) {
-  char msg[48];
-  snprintf(msg, sizeof(msg), "%d:%d:%d:%d:%lu",
-           event.nodeId, event.sensorId, event.carNumber,
+  char msg[64];
+  snprintf(msg, sizeof(msg), "%lu:%d:%d:%d:%d:%lu",
+           seqNumber++, event.nodeId, event.sensorId, event.carNumber,
            event.frequency, event.timestamp);
   webSocket.broadcastTXT(msg);
 }
@@ -335,7 +338,7 @@ void setup() {
   }
 
   Serial.println("#");
-  Serial.println("# Format: NODE:SENSOR:CAR:FREQ:MILLIS");
+  Serial.println("# Format: SEQ:NODE:SENSOR:CAR:FREQ:MILLIS");
   Serial.println("# Parent node = 255, Children = 0,1,2...");
   Serial.println("# Listening for cars...\n");
 }

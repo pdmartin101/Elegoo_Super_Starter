@@ -13,6 +13,7 @@ const int WEBSOCKET_PORT = 81;
 WebSocketsServer webSocket = WebSocketsServer(WEBSOCKET_PORT);
 
 int eventCount = 0;
+uint32_t seqNumber = 0;
 
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
@@ -71,8 +72,8 @@ void loop() {
     int fakeFreq = (int[]){5500, 4400, 3700, 3100, 2800, 2400}[fakeCar - 1];
     eventCount++;
 
-    char msg[48];
-    snprintf(msg, sizeof(msg), "255:0:%d:%d:%lu", fakeCar, fakeFreq, millis());
+    char msg[64];
+    snprintf(msg, sizeof(msg), "%lu:255:0:%d:%d:%lu", seqNumber++, fakeCar, fakeFreq, millis());
 
     webSocket.broadcastTXT(msg);
     Serial.printf("Sent #%d: %s\n", eventCount, msg);

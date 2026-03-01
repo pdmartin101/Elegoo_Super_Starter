@@ -142,6 +142,13 @@ void processSensor(SensorState& sensor, CarDetectedCallback onCarDetected) {
   }
 
   if (sensor.detecting && (micros() - sensor.lastActivityTime > DETECTION_TIMEOUT)) {
+    // Report unknown car if we had enough pulses but never matched
+    if (sensor.lastCarDetected == 0 && sensor.pulseCount >= MIN_PULSES_FOR_ID) {
+      float freq = calculateMedianFrequency(sensor.intervalHistory);
+      if (freq > 0) {
+        onCarDetected(sensor.id, 0, freq);
+      }
+    }
     resetSensor(sensor);
   }
 }

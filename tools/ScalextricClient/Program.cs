@@ -4,7 +4,7 @@ using Makaretu.Dns;
 
 Console.WriteLine("Scalextric Client");
 Console.WriteLine("=================\n");
-Console.WriteLine("Format: NODE:SENSOR:CAR:FREQ:MILLIS");
+Console.WriteLine("Format: SEQ:NODE:SENSOR:CAR:FREQ:MILLIS");
 Console.WriteLine("  Node 255 = Parent, 0-254 = Children\n");
 
 string? wsUrl = null;
@@ -135,6 +135,8 @@ try
     Console.WriteLine(new string('-', 56));
 
     int eventCount = 0;
+    long expectedSeq = -1;
+    int droppedCount = 0;
     var carCounts = new Dictionary<string, int>();
 
     while (ws.State == WebSocketState.Open && !appCts.Token.IsCancellationRequested)
@@ -156,14 +158,23 @@ try
                 if (message.StartsWith("SYNC"))
                     continue;
 
-                // Parse NODE:SENSOR:CAR:FREQ:MILLIS
+                // Parse SEQ:NODE:SENSOR:CAR:FREQ:MILLIS
                 var parts = message.Split(':');
-                if (parts.Length >= 5 && long.TryParse(parts[4], out var eventMillis))
+                if (parts.Length >= 6 && long.TryParse(parts[0], out var seq) && long.TryParse(parts[5], out var eventMillis))
                 {
-                    var node = parts[0];
-                    var sensor = parts[1];
-                    var car = parts[2];
-                    var freq = parts[3];
+                    var node = parts[1];
+                    var sensor = parts[2];
+                    var car = parts[3];
+                    var freq = parts[4];
+
+                    // Detect dropped messages
+                    if (expectedSeq >= 0 && seq != expectedSeq)
+                    {
+                        var missed = seq - expectedSeq;
+                        droppedCount += (int)missed;
+                        Console.WriteLine($"             *** DROPPED {missed} event(s)! (expected seq {expectedSeq}, got {seq}) ***");
+                    }
+                    expectedSeq = seq + 1;
 
                     var nodeName = node == "255" ? "Parent" : $"Node {node}";
                     eventCount++;
@@ -188,7 +199,8 @@ try
                         eventTimeStr = eventMillis.ToString();
                     }
 
-                    Console.WriteLine($"{DateTime.Now:HH:mm:ss.ff}  {nodeName,-8} S{sensor,-7} Car {car,-4} {freq,5} Hz  ms={eventMillis}  @{eventTimeStr}{latencyStr}");
+                    var carLabel = car == "0" ? "?" : car;
+                    Console.WriteLine($"{DateTime.Now:HH:mm:ss.ff}  {nodeName,-8} S{sensor,-7} Car {carLabel,-4} {freq,5} Hz  ms={eventMillis}  @{eventTimeStr}{latencyStr}");
 
                     // Track per-car counts
                     var carKey = $"Car {car}";
@@ -213,7 +225,7 @@ try
         }
     }
 
-    Console.WriteLine($"\nTotal events received: {eventCount}");
+    Console.WriteLine($"\nTotal events received: {eventCount}" + (droppedCount > 0 ? $"  DROPPED: {droppedCount}" : "  (none dropped)"));
     if (carCounts.Count > 0)
     {
         var summary = string.Join("  ", Enumerable.Range(1, 6)
