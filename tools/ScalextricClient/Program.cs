@@ -68,24 +68,20 @@ Console.CancelKeyPress += (s, e) =>
     Console.WriteLine("\nDisconnecting...");
 };
 
-// Self-calibrating clock sync with drift compensation
-// espZeroTime = PC time when ESP32 millis was 0
-// For each message: candidate = receiveTime - eventMillis
-// Take the max from a sliding window to filter jitter while adapting to drift
-const int CALIBRATION_WINDOW = 10;
-var recentCandidates = new Queue<DateTime>();
-DateTime espZeroTime = DateTime.MinValue;
+// Clock sync: espZeroTime = PC time when ESP32 millis was 0
+// candidate = receiveTime - espMillis always overestimates (by network delay)
+// so the lowest candidate ever seen is the most accurate estimate
+DateTime espZeroTime = DateTime.MaxValue;
 bool clockCalibrated = false;
 
 void calibrateClock(DateTime receiveTime, long espMillis)
 {
     var candidate = receiveTime - TimeSpan.FromMilliseconds(espMillis);
-    recentCandidates.Enqueue(candidate);
-    if (recentCandidates.Count > CALIBRATION_WINDOW)
-        recentCandidates.Dequeue();
-
-    espZeroTime = recentCandidates.Min();
-    clockCalibrated = true;
+    if (candidate < espZeroTime)
+    {
+        espZeroTime = candidate;
+        clockCalibrated = true;
+    }
 }
 
 try

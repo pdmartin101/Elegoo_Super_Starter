@@ -111,7 +111,6 @@ void onLocalCarDetected(uint8_t sensorId, int car, float freq) {
 void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
   // Handle channel discovery probe
   if (len == sizeof(ProbeMsg) && data[0] == PROBE_REQUEST_MAGIC) {
-    Serial.printf("# Probe from Node %d, responding\n", data[1]);
     // Add child as peer so we can respond
     if (!esp_now_is_peer_exist(mac)) {
       esp_now_peer_info_t peer = {};
@@ -129,10 +128,7 @@ void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
   }
 
   espNowRecvCount++;
-  if (len != sizeof(CarEvent)) {
-    Serial.printf("# ESP-NOW recv: unexpected %d bytes (expected %d)\n", len, sizeof(CarEvent));
-    return;
-  }
+  if (len != sizeof(CarEvent)) return;
 
   CarEvent event;
   memcpy(&event, data, sizeof(event));
@@ -156,19 +152,14 @@ void onDataReceived(const uint8_t* mac, const uint8_t* data, int len) {
   if (!known && childCount < MAX_CHILDREN) {
     memcpy(childMacs[childCount], mac, 6);
     childCount++;
-    Serial.printf("# New child: %02X:%02X:%02X:%02X:%02X:%02X (Node %d)\n",
-                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
-                  event.nodeId);
   }
 }
 
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:
-      Serial.printf("# WebSocket client %d connected\n", num);
       break;
     case WStype_DISCONNECTED:
-      Serial.printf("# WebSocket client %d disconnected\n", num);
       break;
     case WStype_TEXT:
       if (length >= 4 && memcmp(payload, "SYNC", 4) == 0) {
@@ -359,14 +350,11 @@ void loop() {
   // Then process incoming WebSocket data (can block on TCP reads)
   webSocket.loop();
 
-  // Periodic WiFi status check
+  // Periodic WiFi status check - reconnect silently
   if (millis() - lastWifiCheck > 10000) {
     lastWifiCheck = millis();
     bool connected = WiFi.status() == WL_CONNECTED;
-    if (wifiWasConnected && !connected) {
-      Serial.println("# WiFi lost, waiting for reconnect...");
-    } else if (!wifiWasConnected && connected) {
-      Serial.printf("# WiFi restored: %s\n", WiFi.localIP().toString().c_str());
+    if (!wifiWasConnected && connected) {
       configTime(0, 0, "pool.ntp.org", "time.nist.gov");
     }
     wifiWasConnected = connected;
