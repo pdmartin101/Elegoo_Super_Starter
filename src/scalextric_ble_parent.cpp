@@ -20,7 +20,7 @@
 // Set ESPNOW_ENABLED=1 for ESP-NOW + BLE (~55ms coexistence delay, supports children)
 // Set TEST_TIMER=1 to generate fake events every 1s (for latency testing without sensors)
 //
-// Output format: SEQ:NODE:SENSOR:CAR:FREQ:RECV_MILLIS:SEND_MILLIS
+// Output format: SEQ:NODE:SENSOR:CAR:FREQ:RECV_MILLIS
 
 #ifndef ESPNOW_ENABLED
 #define ESPNOW_ENABLED 1  // Override via build_flags: -DESPNOW_ENABLED=0
@@ -384,7 +384,7 @@ void setup() {
   Serial.println("# KEEPALIVE: 1s interval");
 
   Serial.println("#");
-  Serial.println("# Format: SEQ:NODE:SENSOR:CAR:FREQ:RECV_MILLIS:SEND_MILLIS");
+  Serial.println("# Format: SEQ:NODE:SENSOR:CAR:FREQ:RECV_MILLIS");
   Serial.println("# Parent node = 255, Children = 0,1,2...");
   Serial.println("# Listening for cars...\n");
 }
@@ -400,9 +400,9 @@ void loop() {
     for (int i = 0; i < eventQueueCount; i++) {
       CarEvent& event = eventQueue[i];
       char msg[64];
-      snprintf(msg, sizeof(msg), "%lu:%d:%d:%d:%d:%lu:%lu",
+      snprintf(msg, sizeof(msg), "%lu:%d:%d:%d:%d:%lu",
                seqNumber++, event.nodeId, event.sensorId, event.carNumber,
-               event.frequency, (unsigned long)eventReceiveMs[i], (unsigned long)millis());
+               event.frequency, (unsigned long)eventReceiveMs[i]);
       eventCharacteristic->setValue(msg);
       eventCharacteristic->notify();
     }

@@ -98,7 +98,7 @@ public class SerialTransport : ITransportClient
             catch (TimeoutException) { break; }
         }
 
-        _port.ReadTimeout = SerialPort.InfiniteTimeout;
+        _port.ReadTimeout = 1000;
 
         while (!ct.IsCancellationRequested && _connected)
         {

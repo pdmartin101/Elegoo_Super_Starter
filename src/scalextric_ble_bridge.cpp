@@ -14,7 +14,7 @@
 // Wiring: GPIO26 (RX2) ← ESP32-A GPIO25 (TX2), plus shared GND
 //
 // Input format:  NODE:SENSOR:CAR:FREQ\n
-// Output format: SEQ:NODE:SENSOR:CAR:FREQ:RECV_MILLIS:SEND_MILLIS (same as ble_relay)
+// Output format: SEQ:NODE:SENSOR:CAR:FREQ:RECV_MILLIS
 //
 // SYNC handled entirely by this board using its own millis() — consistent with event timestamps
 
@@ -148,7 +148,7 @@ void setup() {
   timerAlarmEnable(keepaliveTimer);
   Serial.println("# KEEPALIVE: 1s interval");
 
-  Serial.println("# Format: SEQ:NODE:SENSOR:CAR:FREQ:RECV_MILLIS:SEND_MILLIS");
+  Serial.println("# Format: SEQ:NODE:SENSOR:CAR:FREQ:RECV_MILLIS");
   Serial.println("# Waiting for events from ESP-NOW receiver...\n");
 }
 
@@ -177,9 +177,9 @@ void loop() {
     for (int i = 0; i < eventQueueCount; i++) {
       ParsedEvent& event = eventQueue[i];
       char msg[64];
-      snprintf(msg, sizeof(msg), "%lu:%d:%d:%d:%d:%lu:%lu",
+      snprintf(msg, sizeof(msg), "%lu:%d:%d:%d:%d:%lu",
                seqNumber++, event.nodeId, event.sensorId, event.carNumber,
-               event.frequency, (unsigned long)eventReceiveMs[i], (unsigned long)millis());
+               event.frequency, (unsigned long)eventReceiveMs[i]);
       eventCharacteristic->setValue(msg);
       eventCharacteristic->notify();
     }

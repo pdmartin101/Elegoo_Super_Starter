@@ -16,7 +16,7 @@
 // For use without child nodes — ~3ms latency
 // Includes a 1s keepalive to prevent Windows BLE CI drift
 //
-// Output format: SEQ:NODE:SENSOR:CAR:FREQ:RECV_MILLIS:SEND_MILLIS
+// Output format: SEQ:NODE:SENSOR:CAR:FREQ:RECV_MILLIS
 
 #define SERVICE_UUID        "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 #define EVENT_CHAR_UUID     "a1b2c3d4-e5f6-7890-abcd-ef1234567891"
@@ -227,7 +227,7 @@ void setup() {
     Serial.println("# OLED: running on core 0");
   }
 
-  Serial.println("# Format: SEQ:NODE:SENSOR:CAR:FREQ:RECV_MILLIS:SEND_MILLIS");
+  Serial.println("# Format: SEQ:NODE:SENSOR:CAR:FREQ:RECV_MILLIS");
   Serial.println("# Listening...\n");
 }
 
@@ -240,9 +240,9 @@ void loop() {
     for (int i = 0; i < eventQueueCount; i++) {
       CarEvent& event = eventQueue[i];
       char msg[64];
-      snprintf(msg, sizeof(msg), "%lu:%d:%d:%d:%d:%lu:%lu",
+      snprintf(msg, sizeof(msg), "%lu:%d:%d:%d:%d:%lu",
                seqNumber++, event.nodeId, event.sensorId, event.carNumber,
-               event.frequency, (unsigned long)eventReceiveMs[i], (unsigned long)millis());
+               event.frequency, (unsigned long)eventReceiveMs[i]);
       eventCharacteristic->setValue(msg);
       eventCharacteristic->notify();
     }

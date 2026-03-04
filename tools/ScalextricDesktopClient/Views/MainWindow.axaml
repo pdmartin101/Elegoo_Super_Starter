@@ -91,10 +91,8 @@
         <DataGridTextColumn Header="Car" Binding="{Binding CarLabel}" Width="Auto"/>
         <DataGridTextColumn Header="Freq" Binding="{Binding Frequency, StringFormat={}{0} Hz}" Width="Auto"/>
         <DataGridTextColumn Header="Latency" Binding="{Binding LatencyStr}" Width="Auto"/>
-        <DataGridTextColumn Header="Queue" Binding="{Binding InternalDelayStr}" Width="Auto"/>
         <DataGridTextColumn Header="Seq" Binding="{Binding Sequence}" Width="Auto"/>
-        <DataGridTextColumn Header="Recv ms" Binding="{Binding EspRecvMillis}" Width="Auto"/>
-        <DataGridTextColumn Header="Send ms" Binding="{Binding EspSendMillis}" Width="*"/>
+        <DataGridTextColumn Header="ESP ms" Binding="{Binding EspRecvMillis}" Width="*"/>
       </DataGrid.Columns>
     </DataGrid>
 

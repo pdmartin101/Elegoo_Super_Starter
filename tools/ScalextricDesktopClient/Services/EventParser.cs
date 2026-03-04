@@ -23,10 +23,6 @@ public class EventParser
         if (!int.TryParse(parts[4], out var freq)) return null;
         if (!long.TryParse(parts[5], out var espRecvMillis)) return null;
 
-        long? espSendMillis = null;
-        if (parts.Length >= 7 && long.TryParse(parts[6], out var sendMs))
-            espSendMillis = sendMs;
-
         _clock.Update(receiveTimeUtc, espRecvMillis);
 
         DateTime? eventTimeLocal = null;
@@ -37,7 +33,7 @@ public class EventParser
             latencyMs = _clock.GetLatencyMs(receiveTimeUtc, espRecvMillis);
         }
 
-        return new ScalextricEvent(seq, node, sensor, car, freq, espRecvMillis, espSendMillis,
+        return new ScalextricEvent(seq, node, sensor, car, freq, espRecvMillis,
             receiveTimeUtc, eventTimeLocal, latencyMs);
     }
 }

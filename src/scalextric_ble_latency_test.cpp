@@ -127,7 +127,7 @@ void setup() {
   timerAlarmEnable(timer);
 
   Serial.println("# BLE advertising as 'Scalextric-Relay'");
-  Serial.println("# Format: SEQ:NODE:SENSOR:CAR:FREQ:RECV_MILLIS:SEND_MILLIS");
+  Serial.println("# Format: SEQ:NODE:SENSOR:CAR:FREQ:RECV_MILLIS");
   Serial.println("# Timer fires every 1s (simulating ESP-NOW callback)...\n");
 }
 
@@ -137,9 +137,9 @@ void loop() {
     for (int i = 0; i < eventQueueCount; i++) {
       FakeEvent& event = eventQueue[i];
       char msg[64];
-      snprintf(msg, sizeof(msg), "%lu:%d:%d:%d:%d:%lu:%lu",
+      snprintf(msg, sizeof(msg), "%lu:%d:%d:%d:%d:%lu",
                seqNumber++, event.nodeId, event.sensorId, event.carNumber,
-               event.frequency, (unsigned long)eventReceiveMs[i], (unsigned long)millis());
+               event.frequency, (unsigned long)eventReceiveMs[i]);
       eventCharacteristic->setValue(msg);
       eventCharacteristic->notify();
     }
